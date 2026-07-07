@@ -2,7 +2,7 @@ import asyncio
 import sys
 from loguru import logger  # [1]
 from config import settings
-from agents import imagebot_agent
+from agents import registry
 
 
 def init_logging():
@@ -17,22 +17,22 @@ def init_logging():
 async def main_async():
     init_logging()
     logger.info("Initializing Nexus Core...")
+    logger.info("--- Testing Registry Layer ---")
 
-    logger.info("--- Testing Agent Layer ---")
+    # 1. Получаем список всех доступных проектов в экосистеме
+    available_agents = registry.list_agents()
+    logger.info(f"Discovered registered agents: {available_agents}")
 
-    # Спрашиваем здоровье всего проекта ОДНОЙ командой
-    logger.info(f"Checking project health: '{imagebot_agent.name}'...")
-    health_report = await imagebot_agent.get_health()
+    # 2. Динамически опрашиваем каждый обнаруженный проект
+    for agent_name in available_agents:
+        logger.info(f"Dynamically resolving state for '{agent_name}'...")
 
-    logger.success(f"Aggregated health report: {health_report}")
+        # Запрашиваем агента из реестра по имени
+        agent = registry.get(agent_name)
 
-    # Точечно достаем метрики конкретного ресурса через Агента
-    logger.info("Requesting detailed metrics via Agent resources...")
-    app_metrics = await imagebot_agent.resources["app"].get_metrics()
-    storage_metrics = await imagebot_agent.resources["storage"].get_metrics()
-
-    logger.success(f"App container metrics: {app_metrics}")
-    logger.success(f"Storage metrics: {storage_metrics}")
+        # Получаем здоровье
+        health = await agent.get_health()
+        logger.success(f"[{agent_name.upper()}] Health state: {health}")
 
 
 def main():
