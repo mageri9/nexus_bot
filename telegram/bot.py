@@ -2,27 +2,31 @@ from aiogram import Bot, Dispatcher
 from loguru import logger  # [1]
 
 from config import settings
-from services import event_bus  # Наша шина событий
+from services import event_bus, state_collector  # Импортируем сборщик
 from .handlers import router
-from .notifier import TelegramNotifier  # Оповещатель
+from .notifier import TelegramNotifier
 
 
 async def start_bot():
-    # Чистая инициализация без прокси-сессий
     bot = Bot(token=settings.bot_token_str)
     dp = Dispatcher()
 
     dp.include_router(router)
 
-    # --- НАСТРОЙКА ШИНЫ СОБЫТИЙ ---
+    # Настройка шины событий
     notifier = TelegramNotifier(bot=bot)
-
-    # Подписываем notifier на события шины
     event_bus.subscribe("action:success", notifier.on_action_success)
     event_bus.subscribe("action:failed", notifier.on_action_failed)
+
+    # --- ЗАПУСК ФОНОВОГО СБОРЩИКА ---
+    state_collector.start()
 
     logger.info("Clearing potential webhook conflicts and dropping pending updates...")
     await bot.delete_webhook(drop_pending_updates=True)
 
     logger.info("Nexus telegram terminal starting poll...")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        # Грациозно завершаем задачу сборщика при выходе из бота [1]
+        await state_collector.stop()
