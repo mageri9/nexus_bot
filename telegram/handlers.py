@@ -4,7 +4,7 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger  # [1]
 
-from services import query_service, command_service
+from services import query_service, command_service, ai_service
 from telegram.filters import IsAdmin
 
 router = Router()
@@ -115,13 +115,16 @@ async def handle_agent_action(
 
 
 @router.message()
-async def debug_catch_all(message: types.Message):
-    logger.debug(f"DEBUG CATCH-ALL: Received text: '{message.text}'")
+async def handle_ai_query(message: types.Message):
+    sent_msg = await message.answer("🧠 <i>Nexus AI анализирует состояние системы (Gemma 4)...</i>", parse_mode="HTML")
     try:
-        await message.answer(
-            f"🤖 Получил твой текст: '<code>{message.text}</code>'. Но он не совпал с командами.",
-            parse_mode="HTML",
-        )
-        logger.success("DEBUG CATCH-ALL: Echo reply sent successfully!")
+        # Просим ИИ проанализировать систему и логи упавших сервисов через AITUNNEL
+        ai_response = await ai_service.analyze_system(message.text)
+        await sent_msg.edit_text(ai_response, parse_mode="Markdown")
     except Exception as e:
-        logger.error(f"DEBUG CATCH-ALL: Failed to send reply: {e}")
+        logger.error(f"AI Analysis failed: {e}")
+        await sent_msg.edit_text(
+            f"❌ <b>Ошибка ИИ-анализа</b>: <code>{str(e)}</code>\n"
+            f"Убедитесь, что параметр <code>AITUNNEL_API_KEY</code> корректно настроен в <code>.env</code>.",
+            parse_mode="HTML"
+        )
