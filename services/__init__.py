@@ -1,5 +1,7 @@
 from .query import QueryService
+from .command import CommandService
 from agents import registry
 
-# Создаем готовый инстанс Query API для внешних слоев
+# Экспортируем синглтоны для CQS-слоя Nexus
 query_service = QueryService(registry=registry)
+command_service = CommandService(registry=registry)
