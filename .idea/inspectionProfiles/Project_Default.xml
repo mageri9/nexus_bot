@@ -1,0 +1,86 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="altgraph" />
+          <option value="anyio" />
+          <option value="beautifulsoup4" />
+          <option value="cffi" />
+          <option value="charset-normalizer" />
+          <option value="click" />
+          <option value="crayons" />
+          <option value="cryptography" />
+          <option value="h11" />
+          <option value="httpcore" />
+          <option value="httpx" />
+          <option value="httpx-sse" />
+          <option value="jsonschema" />
+          <option value="jsonschema-specifications" />
+          <option value="mcp" />
+          <option value="numpy" />
+          <option value="opencv-python" />
+          <option value="outcome" />
+          <option value="pandas" />
+          <option value="pefile" />
+          <option value="piexif" />
+          <option value="pillow" />
+          <option value="pycparser" />
+          <option value="pyinstaller" />
+          <option value="pyinstaller-hooks-contrib" />
+          <option value="python-dateutil" />
+          <option value="python-multipart" />
+          <option value="pytz" />
+          <option value="pywin32" />
+          <option value="pywin32-ctypes" />
+          <option value="referencing" />
+          <option value="requests" />
+          <option value="rpds-py" />
+          <option value="selenium" />
+          <option value="setuptools" />
+          <option value="six" />
+          <option value="sniffio" />
+          <option value="sortedcontainers" />
+          <option value="soupsieve" />
+          <option value="sse-starlette" />
+          <option value="starlette" />
+          <option value="stegano" />
+          <option value="trio" />
+          <option value="trio-websocket" />
+          <option value="tzdata" />
+          <option value="urllib3" />
+          <option value="uvicorn" />
+          <option value="websocket-client" />
+          <option value="wsproto" />
+          <option value="PyJWT" />
+          <option value="PySocks" />
+          <option value="PyYAML" />
+          <option value="aiogram" />
+          <option value="asyncpg" />
+          <option value="pydantic" />
+          <option value="pydantic-settings" />
+          <option value="loguru" />
+          <option value="psycopg2-binary" />
+          <option value="python-dotenv" />
+          <option value="redis" />
+          <option value="alembic" />
+          <option value="psutil" />
+          <option value="openai" />
+          <option value="tkinter" />
+          <option value="moviepy" />
+          <option value="structlog" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyUnresolvedReferencesInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredIdentifiers">
+        <list>
+          <option value="int.*" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="SqlNoDataSourceInspection" enabled="false" level="WARNING" enabled_by_default="false" />
+    <inspection_tool class="UnsatisfiedRequirementInspection" enabled="false" level="WARNING" enabled_by_default="false" />
+  </profile>
+</component>
