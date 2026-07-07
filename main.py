@@ -1,9 +1,8 @@
 import asyncio
 import sys
 from loguru import logger  # [1]
-from config.settings import settings
-from transports.local_shell import LocalShellTransport
-from infra.docker import DockerContainer
+from config import settings
+from agents import imagebot_agent
 
 
 def init_logging():
@@ -19,40 +18,21 @@ async def main_async():
     init_logging()
     logger.info("Initializing Nexus Core...")
 
-    transport = LocalShellTransport()
+    logger.info("--- Testing Agent Layer ---")
 
-    # Инициализируем наш первый ресурс, связав его с транспортом
-    test_container = DockerContainer(
-        name="test_service", transport=transport, container_name="nexus-test"
-    )
+    # Спрашиваем здоровье всего проекта ОДНОЙ командой
+    logger.info(f"Checking project health: '{imagebot_agent.name}'...")
+    health_report = await imagebot_agent.get_health()
 
-    logger.info("--- Testing Resource Layer ---")
+    logger.success(f"Aggregated health report: {health_report}")
 
-    # Шаг 1: Проверяем статус
-    status = await test_container.get_status()
-    logger.info(f"Container status: {status}")
+    # Точечно достаем метрики конкретного ресурса через Агента
+    logger.info("Requesting detailed metrics via Agent resources...")
+    app_metrics = await imagebot_agent.resources["app"].get_metrics()
+    storage_metrics = await imagebot_agent.resources["storage"].get_metrics()
 
-    if status == "unknown":
-        logger.error("Test container 'nexus-test' is not found. Please run:")
-        logger.error("docker run -d --name nexus-test alpine sleep 1000")
-        return
-
-    # Шаг 2: Получаем метрики
-    metrics = await test_container.get_metrics()
-    logger.success(f"Fetched metrics: {metrics}")
-
-    # Шаг 3: Читаем последние строки логов
-    logs = await test_container.get_logs(limit=3)
-    logger.info(f"Container logs:\n{logs if logs else '[Empty]'}")
-
-    # Шаг 4: Тестируем мутирующее действие (restart)
-    logger.info("Restarting container...")
-    restart_result = await test_container.restart()
-    logger.success(f"Container successfully restarted! ID: {restart_result}")
-
-    # Перепроверяем статус после перезагрузки
-    new_status = await test_container.get_status()
-    logger.success(f"Post-restart status: {new_status}")
+    logger.success(f"App container metrics: {app_metrics}")
+    logger.success(f"Storage metrics: {storage_metrics}")
 
 
 def main():
