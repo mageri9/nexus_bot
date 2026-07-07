@@ -3,6 +3,7 @@ import sys
 from loguru import logger  # [1]
 from config.settings import settings
 from transports.local_shell import LocalShellTransport
+from infra.docker import DockerContainer
 
 
 def init_logging():
@@ -18,37 +19,43 @@ async def main_async():
     init_logging()
     logger.info("Initializing Nexus Core...")
 
-    # Инициализируем локальный транспорт
     transport = LocalShellTransport()
 
-    logger.info("--- Testing Transport Layer ---")
+    # Инициализируем наш первый ресурс, связав его с транспортом
+    test_container = DockerContainer(
+        name="test_service", transport=transport, container_name="nexus-test"
+    )
 
-    try:
-        # Тест 1: Простая безопасная команда echo
-        echo_result = await transport.run(["echo", "Nexus transport is alive!"])
-        logger.success(f"Test 1 (echo) success: '{echo_result}'")
+    logger.info("--- Testing Resource Layer ---")
 
-        # Тест 2: Проверим, доступен ли Docker CLI
-        logger.info("Test 2: Requesting running Docker containers...")
-        docker_result = await transport.run(["docker", "ps", "--format", "{{.Names}}"])
+    # Шаг 1: Проверяем статус
+    status = await test_container.get_status()
+    logger.info(f"Container status: {status}")
 
-        if docker_result:
-            logger.success(f"Test 2 success! Running containers:\n{docker_result}")
-        else:
-            logger.success(
-                "Test 2 success! Docker is running, but no active containers found."
-            )
+    if status == "unknown":
+        logger.error("Test container 'nexus-test' is not found. Please run:")
+        logger.error("docker run -d --name nexus-test alpine sleep 1000")
+        return
 
-    except RuntimeError as e:
-        logger.warning(
-            f"Sys-call test finished with controlled exception (e.g. Docker is offline): {e}"
-        )
-    except Exception as e:
-        logger.exception(f"Unexpected transport failure: {e}")
+    # Шаг 2: Получаем метрики
+    metrics = await test_container.get_metrics()
+    logger.success(f"Fetched metrics: {metrics}")
+
+    # Шаг 3: Читаем последние строки логов
+    logs = await test_container.get_logs(limit=3)
+    logger.info(f"Container logs:\n{logs if logs else '[Empty]'}")
+
+    # Шаг 4: Тестируем мутирующее действие (restart)
+    logger.info("Restarting container...")
+    restart_result = await test_container.restart()
+    logger.success(f"Container successfully restarted! ID: {restart_result}")
+
+    # Перепроверяем статус после перезагрузки
+    new_status = await test_container.get_status()
+    logger.success(f"Post-restart status: {new_status}")
 
 
 def main():
-    # Запускаем асинхронный цикл [1]
     asyncio.run(main_async())
 
 
