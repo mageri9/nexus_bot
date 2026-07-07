@@ -2,7 +2,7 @@ import asyncio
 import sys
 from loguru import logger  # [1]
 from config import settings
-from services import query_service
+from telegram import start_bot
 
 
 def init_logging():
@@ -17,25 +17,12 @@ def init_logging():
 async def main_async():
     init_logging()
     logger.info("Initializing Nexus Core...")
-    logger.info("--- Testing Query Service Layer ---")
 
-    # 1. Быстрый опрос статуса всей системы
-    logger.info("Fetching global system status summary...")
-    system_status = await query_service.get_system_status()
-    logger.success(f"System Status: {system_status}")
-
-    # 2. Подробные данные по агенту ImageBot (метрики контейнера + диска)
-    logger.info("Fetching details for 'imagebot'...")
-    imagebot_details = await query_service.get_agent_details("imagebot")
-    logger.success(f"ImageBot Details:\n{imagebot_details}")
-
-    # 3. Чтение логов через сервисный слой
-    logger.info("Requesting logs for 'imagebot.app'...")
     try:
-        logs = await query_service.get_resource_logs("imagebot", "app", limit=3)
-        logger.success(f"Successfully retrieved logs:\n{logs}")
+        # Передаем управление циклом асинхронному поллингу бота [1]
+        await start_bot()
     except Exception as e:
-        logger.error(f"Failed to fetch logs: {e}")
+        logger.critical(f"Nexus bot stopped with fatal error: {e}")
 
 
 def main():
