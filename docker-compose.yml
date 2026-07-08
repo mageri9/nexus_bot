@@ -11,24 +11,65 @@ services:
       timeout: 3s
       retries: 5
 
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: nexus-docker-proxy
+    restart: unless-stopped
+    # Разрешаем только то, что реально используют DockerContainer.get_status /
+    # get_metrics / restart / get_logs: inspect, stats, logs, restart.
+    # Всё остальное (exec, images, build, commit, volumes, networks, swarm,
+    # system, secrets...) явно запрещено — это и есть весь смысл прокси.
+    environment:
+      - CONTAINERS=1   # GET/POST/DELETE на /containers/* (inspect, stats, logs, restart, stop, start)
+      - POST=1         # без этого restart (POST-запрос) не пройдёт вообще
+      - INFO=0
+      - IMAGES=0
+      - NETWORKS=0
+      - VOLUMES=0
+      - EXEC=0         # критично: запрещает docker exec — иначе прокси бесполезен
+      - BUILD=0
+      - COMMIT=0
+      - CONFIGS=0
+      - PLUGINS=0
+      - SECRETS=0
+      - SERVICES=0
+      - SESSION=0
+      - SWARM=0
+      - SYSTEM=0
+      - TASKS=0
+      - NODES=0
+      - DISTRIBUTION=0
+      - AUTH=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - nexus_internal
+
   nexus:
-    # Использует собранный в GHCR образ. Если переменной нет, подставит дефолт
     image: ${GHCR_IMAGE_NAME:-ghcr.io/mageri9/nexus}:latest
     container_name: nexus-core
     restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
+      docker-proxy:
+        condition: service_started
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /:/host_root:ro
+      # Сокет больше НЕ монтируем напрямую
+      - /home/mageri9/apps/m9_imagebot/data:/host_root/home/mageri9/apps/m9_imagebot/data:ro
+      - /home/mageri9/apps/tarot_bot:/host_root/home/mageri9/apps/tarot_bot:ro
+      - /home/mageri9/apps/commit_chronicle/data:/host_root/home/mageri9/apps/commit_chronicle/data:ro
+      - /:/host_root:ro   # оставляем широким только для root_disk (nexus_agent мониторит системный диск целиком)
     env_file:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - DOCKER_HOST=tcp://docker-proxy:2375
+    networks:
+      - nexus_internal
+      - default
 
   webhook:
-    # Использует тот же образ, но переопределяет команду запуска на uvicorn
     image: ${GHCR_IMAGE_NAME:-ghcr.io/mageri9/nexus}:latest
     container_name: nexus-webhook
     command: uvicorn webhook_service:app --host 0.0.0.0 --port 8000
@@ -41,7 +82,6 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
 
-  # Бесплатный HTTPS-туннель для вебхуков
   tunnel:
     image: cloudflare/cloudflared:latest
     container_name: nexus-tunnel
@@ -52,3 +92,7 @@ services:
 
 volumes:
   redis_data:
+
+networks:
+  nexus_internal:
+    internal: true   # docker-proxy недоступен снаружи compose-сети вообще
