@@ -20,7 +20,8 @@ tarot_agent = ProjectAgent(
     resources={
         "bot": DockerContainer("bot", local_transport, "tarot_bot"),
         "postgres": DockerContainer("postgres", local_transport, "tarot_bot_postgres"),
-        "redis": DockerContainer("redis", local_transport, "tarot_bot_redis")
+        "redis": DockerContainer("redis", local_transport, "tarot_bot_redis"),
+        "data_disk": DiskResource("data_disk", local_transport, "/host_root/home/mageri9/apps/tarot_bot")
     }
 )
 
