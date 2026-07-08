@@ -1,0 +1,35 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: nexus-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  nexus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nexus-core
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      # Проброс Docker сокета для DooD
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Монтирование корневой ФС хоста в режиме 'только чтение' для мониторинга дисков
+      - /:/host_root:ro
+    env_file:
+      - .env
+    environment:
+      # Перезаписываем URL для работы внутри сети Docker Compose
+      - REDIS_URL=redis://redis:6379/0
+
+volumes:
+  redis_data:

@@ -1,4 +1,3 @@
-# core/agent.py
 import asyncio
 from typing import Dict, Any
 from core.resource import Resource

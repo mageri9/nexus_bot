@@ -17,6 +17,6 @@ imagebot_agent = ProjectAgent(
 chronicle_agent = ProjectAgent(
     name="chronicle",
     resources={
-        "root_disk": DiskResource("root_disk", local_transport, "/")
+        "root_disk": DiskResource("root_disk", local_transport, "/host_root")
     }
 )

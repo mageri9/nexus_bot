@@ -1,4 +1,3 @@
-# telegram/filters.py
 from aiogram.filters import Filter
 from aiogram.types import Message
 from loguru import logger  # [1]
