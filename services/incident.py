@@ -30,26 +30,27 @@ class IncidentService:
         self.event_bus = event_bus
 
     async def on_resource_failed(self, event_type: str, data: dict) -> None:
-        """Обработчик событий отказа ресурса (ResourceStopped / ResourceUnhealthy)"""
         project = data["agent"]
         resource = data["resource"]
         new_status = data["new_status"]
         metrics = data.get("metrics", {})
 
-        # Проверяем, есть ли уже открытый инцидент для этой пары проект:ресурс
         active_key = f"nexus:incident:active:{project}:{resource}"
-        existing_id = await self.redis.get(active_key)
-        if existing_id:
-            logger.debug(
-                f"Incident for {project}:{resource} is already open (ID: {existing_id}). Skipping."
-            )
-            return
 
-        # Генерация инкрементного ID для человекочитаемых номеров (например, #41)
         incident_num = await self.redis.incr("nexus:incident:counter")
         incident_id = f"{incident_num}"
 
-        # 1. Автоматический сбор логов на момент падения
+        # Атомарно "занимаем" active_key. TTL — страховка на случай,
+        # если процесс упадёт между этим SET и записью detail_key ниже:
+        # без TTL ресурс навсегда застрял бы в состоянии "инцидент открыт"
+        # и повторные падения молча игнорировались бы.
+        acquired = await self.redis.set(active_key, incident_id, nx=True, ex=3600)
+        if not acquired:
+            logger.debug(
+                f"Incident for {project}:{resource} is already open. Skipping."
+            )
+            return
+
         logs = None
         try:
             logs = await self.query_service.get_resource_logs(
@@ -58,12 +59,10 @@ class IncidentService:
         except Exception as e:
             logs = f"Не удалось извлечь логи: {str(e)}"
 
-        # 2. Определение точного количества рестартов из Docker Daemon хоста
         restart_count = 0
         try:
             agent_obj = self.query_service.registry.get(project)
             res_obj = agent_obj.resources.get(resource)
-            # Проверяем, поддерживает ли ресурс транспорт и содержит ли имя контейнера
             if hasattr(res_obj, "container_name") and hasattr(res_obj, "transport"):
                 raw_restarts = await res_obj.transport.run(
                     [
@@ -94,18 +93,15 @@ class IncidentService:
             restart_count=restart_count,
         )
 
-        # Сохранение состояния инцидента в Redis
         await self.redis.set(
             f"nexus:incident:detail:{incident_id}", incident.model_dump_json()
         )
-        await self.redis.set(active_key, incident_id)
         await self.redis.lpush("nexus:incidents:history", incident_id)
 
         logger.info(
             f"🚨 IncidentService: Created Incident #{incident_id} for {project}:{resource}"
         )
 
-        # Публикуем событие открытия инцидента в шину
         await self.event_bus.publish("incident:opened", incident.model_dump())
 
     async def on_resource_recovered(self, event_type: str, data: dict) -> None:
