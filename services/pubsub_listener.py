@@ -27,37 +27,37 @@ class PubSubListener:
                 pass
 
     async def _loop(self) -> None:
-        pubsub = self.redis.pubsub()
-        await pubsub.subscribe("nexus:pubsub:devops")
+        while True:
+            try:
+                pubsub = self.redis.pubsub()
+                await pubsub.subscribe("nexus:pubsub:devops")
 
-        try:
-            while True:
-                # Опрашиваем сокет Pub/Sub без блокировки основного потока
-                message = await pubsub.get_message(
-                    ignore_subscribe_messages=True, timeout=1.0
+                while True:
+                    message = await pubsub.get_message(
+                        ignore_subscribe_messages=True, timeout=1.0
+                    )
+                    if message:
+                        try:
+                            data = json.loads(message["data"])
+                            event_type = data.get("event_type")
+                            payload = data.get("payload", {})
+
+                            logger.info(
+                                f"PubSubListener: Discovered external event '{event_type}'"
+                            )
+
+                            await self.event_bus.publish(event_type, payload)
+                        except Exception as parse_err:
+                            logger.error(
+                                f"PubSubListener: Failed to parse Redis message: {parse_err}"
+                            )
+
+                    await asyncio.sleep(0.1)
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(
+                    f"PubSubListener loop encountered error: {e}. Reconnecting in 5s..."
                 )
-                if message:
-                    try:
-                        data = json.loads(message["data"])
-                        event_type = data.get("event_type")
-                        payload = data.get("payload", {})
-
-                        logger.info(
-                            f"PubSubListener: Discovered external event '{event_type}'"
-                        )
-
-                        # Пересылаем внешнее событие во внутренний EventBus бота
-                        await self.event_bus.publish(event_type, payload)
-                    except Exception as parse_err:
-                        logger.error(
-                            f"PubSubListener: Failed to parse Redis message: {parse_err}"
-                        )
-
-                await asyncio.sleep(0.1)
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"PubSubListener loop encountered error: {e}")
-            # Плавный реконнект в случае падения сети Redis
-            await asyncio.sleep(5)
-            self.start()
+                await asyncio.sleep(5)
