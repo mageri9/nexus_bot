@@ -27,6 +27,7 @@ from telegram.notifier import IncidentActionCallback
 
 router = Router()
 router.message.filter(IsAdmin())
+router.callback_query.filter(IsAdmin())
 
 
 # Описываем локальный контракт для базовых callback-кнопок команды /status
