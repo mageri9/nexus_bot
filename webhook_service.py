@@ -1,31 +1,61 @@
 import os
 import json
+import hmac
+import hashlib
 from fastapi import FastAPI, Request, Header, HTTPException
 from redis.asyncio import Redis
 
 app = FastAPI(title="Nexus DevOps Webhook Receiver")
 
-# Подключаемся к Redis
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
 
+WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "")
+
+
+def verify_signature(payload_body: bytes, signature_header: str | None) -> bool:
+    """Проверяет HMAC-SHA256 подпись тела запроса от GitHub."""
+    if not WEBHOOK_SECRET:
+        # Секрет не сконфигурирован — по умолчанию отклоняем все запросы,
+        # а не пропускаем их молча.
+        return False
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+
+    expected = hmac.new(
+        WEBHOOK_SECRET.encode(), payload_body, hashlib.sha256
+    ).hexdigest()
+    received = signature_header.removeprefix("sha256=")
+
+    return hmac.compare_digest(expected, received)
+
 
 @app.post("/webhooks/github")
-async def github_webhook(request: Request, x_github_event: str = Header(None)):
+async def github_webhook(
+    request: Request,
+    x_github_event: str = Header(None),
+    x_hub_signature_256: str = Header(None),
+):
     """Принимает вебхуки от GitHub Webhooks API"""
+    raw_body = await request.body()
+
+    if not verify_signature(raw_body, x_hub_signature_256):
+        raise HTTPException(status_code=401, detail="Invalid or missing signature")
+
     if not x_github_event:
         raise HTTPException(status_code=400, detail="Missing X-GitHub-Event header")
 
-    payload = await request.json()
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    # Обрабатываем событие завершения выполнения воркфлоу
     if x_github_event == "workflow_run":
         workflow_run = payload.get("workflow_run", {})
-        status = workflow_run.get("status")  # например, completed, requested
-        conclusion = workflow_run.get("conclusion")  # например, success, failure
+        status = workflow_run.get("status")
+        conclusion = workflow_run.get("conclusion")
 
         if status == "completed":
-            # Формируем унифицированное событие для шины Nexus
             event_type = f"devops:workflow_{conclusion}"
             event_data = {
                 "event_type": event_type,
@@ -40,7 +70,6 @@ async def github_webhook(request: Request, x_github_event: str = Header(None)):
                 }
             }
 
-            # Публикуем событие во внешний транспорт Redis Pub/Sub
             await redis_client.publish("nexus:pubsub:devops", json.dumps(event_data))
             return {"status": "dispatched", "event": event_type}
 
