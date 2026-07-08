@@ -18,6 +18,10 @@ async def start_bot():
     event_bus.subscribe("action:success", notifier.on_action_success)
     event_bus.subscribe("action:failed", notifier.on_action_failed)
 
+    # Регистрация подписчиков на события инцидентов
+    event_bus.subscribe("incident:opened", notifier.on_incident_opened)
+    event_bus.subscribe("incident:resolved", notifier.on_incident_resolved)
+
     # --- ЗАПУСК ФОНОВОГО СБОРЩИКА ---
     state_collector.start()
 
