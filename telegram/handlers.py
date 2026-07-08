@@ -33,30 +33,66 @@ async def cmd_start(message: types.Message):
 @router.message(Command("status"))
 async def cmd_status(message: types.Message):
     sent_msg = await message.answer(
-        "🔍 <i>Requesting current ecosystem state...</i>", parse_mode="HTML"
+        "🔍 <i>Requesting current ecosystem state and calculating health...</i>",
+        parse_mode="HTML",
     )
     try:
-        system_status = await query_service.get_system_status()
-
         keyboard_builder = InlineKeyboardBuilder()
         report_lines = ["📡 <b>Nexus Ecosystem Status</b>:\n"]
 
-        for agent_name, resources in system_status.items():
-            all_ok = all(
-                status in ("running", "healthy") for status in resources.values()
-            )
-            status_emoji = "🟢" if all_ok else "🔴"
+        # Получаем список всех зарегистрированных агентов из реестра
+        agent_names = query_service.registry.list_agents()
 
-            report_lines.append(f"{status_emoji} <b>{agent_name.upper()}</b>")
-            for res_name, res_status in resources.items():
+        for agent_name in agent_names:
+            # Читаем детальный слепок состояния агента со всеми метриками
+            agent_details = await query_service.get_agent_details(agent_name)
+
+            # Рассчитываем Health Score
+            score = query_service.calculate_health_score(agent_name, agent_details)
+
+            # Цветовой маркер общего состояния проекта
+            if score >= 90:
+                score_emoji = "🟢"
+            elif score >= 70:
+                score_emoji = "🟡"
+            else:
+                score_emoji = "🔴"
+
+            report_lines.append(
+                f"{score_emoji} <b>{agent_name.upper()}</b> | <b>Health: {score}%</b>"
+            )
+
+            for res_name, res_data in agent_details.items():
+                if res_name == "error":
+                    report_lines.append(
+                        f"  └─ ❌ <code>error</code>: <code>No data from collector</code>"
+                    )
+                    continue
+
+                res_status = res_data.get("status", "unknown")
                 res_emoji = "✅" if res_status in ("running", "healthy") else "❌"
+
+                # Читаем утилизацию для отображения в сводке
+                metrics = res_data.get("metrics", {})
+                cpu = metrics.get("cpu", "0%")
+                ram = metrics.get("mem_perc", "0%")
+                restarts = metrics.get("restarts", 0)
+
+                meta_str = (
+                    f" [CPU: {cpu} | RAM: {ram}]"
+                    if res_status in ("running", "healthy")
+                    else ""
+                )
+                restarts_str = f" (Restarts: {restarts})" if restarts > 0 else ""
+
                 report_lines.append(
-                    f"  └─ {res_emoji} <code>{res_name}</code>: <code>{res_status}</code>"
+                    f"  └─ {res_emoji} <code>{res_name}</code>: <code>{res_status}</code>{meta_str}{restarts_str}"
                 )
 
+                # Добавляем инлайн-кнопку перезапуска, если поддерживается
                 agent_obj = query_service.registry.get(agent_name)
-                resource_obj = agent_obj.resources[res_name]
-                if hasattr(resource_obj, "restart"):
+                resource_obj = agent_obj.resources.get(res_name)
+                if resource_obj and hasattr(resource_obj, "restart"):
                     keyboard_builder.button(
                         text=f"🔄 Restart {agent_name}:{res_name}",
                         callback_data=AgentActionCallback(
