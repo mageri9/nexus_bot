@@ -83,10 +83,14 @@ services:
       - REDIS_URL=redis://redis:6379/0
 
   tunnel:
-    image: cloudflare/cloudflared:latest
+    build:
+      context: ./cloudflared
     container_name: nexus-tunnel
     restart: unless-stopped
-    command: tunnel --url http://webhook:8000
+    env_file:
+      - .env
+    environment:
+      - GITHUB_REPO=mageri9/nexus_bot
     depends_on:
       - webhook
 
