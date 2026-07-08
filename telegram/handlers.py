@@ -74,15 +74,23 @@ async def cmd_status(message: types.Message):
 
                 # Читаем утилизацию для отображения в сводке
                 metrics = res_data.get("metrics", {})
-                cpu = metrics.get("cpu", "0%")
-                ram = metrics.get("mem_perc", "0%")
+                cpu = metrics.get("cpu")
+                ram = metrics.get("mem_perc")
                 restarts = metrics.get("restarts", 0)
 
-                meta_str = (
-                    f" [CPU: {cpu} | RAM: {ram}]"
-                    if res_status in ("running", "healthy")
-                    else ""
-                )
+                # Метрики диска
+                use_percent = metrics.get("use_percent")
+                size = metrics.get("size")
+                used = metrics.get("used")
+
+                # Формируем мета-строку в зависимости от типа ресурса
+                if cpu and ram:
+                    meta_str = f" [CPU: {cpu} | RAM: {ram}]"
+                elif use_percent:
+                    meta_str = f" [Disk: {used}/{size} ({use_percent})]"
+                else:
+                    meta_str = ""
+
                 restarts_str = f" (Restarts: {restarts})" if restarts > 0 else ""
 
                 report_lines.append(
