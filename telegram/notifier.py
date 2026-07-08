@@ -228,7 +228,52 @@ class TelegramNotifier:
                     chat_id=chat_id,
                     text=f"⚠️ <i>Не удалось сформировать автоматический ИИ-анализ для инцидента #{inc_id}: сервис недоступен или превышена квота запросов.</i>",
                     parse_mode="HTML",
-                    reply_to_message_id=message_id
+                    reply_to_message_id=message_id,
                 )
             except Exception:
                 pass
+
+    async def on_devops_workflow_success(self, event_type: str, data: dict) -> None:
+        """Оповещает об успешном деплое / прохождении пайплайна"""
+        text = (
+            f"🚀 <b>CI/CD: Build & Deployment Success</b>\n\n"
+            f"<b>Repository:</b> <code>{data.get('repository')}</code>\n"
+            f"<b>Workflow:</b> <code>{data.get('workflow_name')}</code>\n"
+            f"<b>Branch:</b> <code>{data.get('branch')}</code>\n"
+            f"<b>Commit:</b> <code>{data.get('commit_sha')}</code>\n"
+            f"<b>Author:</b> @{data.get('author')}\n"
+            f"<b>Message:</b> <code>{data.get('commit_message')}</code>\n\n"
+            f"🔗 <a href='{data.get('url')}'>View Workflow Logs</a>"
+        )
+        try:
+            await self.bot.send_message(
+                chat_id=self.admin_id,
+                text=text,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+        except Exception as e:
+            logger.error(f"Notifier: Failed to send workflow success alert: {e}")
+
+    async def on_devops_workflow_failure(self, event_type: str, data: dict) -> None:
+        """Оповещает о падении CI/CD пайплайна"""
+        text = (
+            f"❌ <b>CI/CD: Build Failed</b>\n\n"
+            f"<b>Repository:</b> <code>{data.get('repository')}</code>\n"
+            f"<b>Workflow:</b> <code>{data.get('workflow_name')}</code>\n"
+            f"<b>Branch:</b> <code>{data.get('branch')}</code>\n"
+            f"<b>Commit:</b> <code>{data.get('commit_sha')}</code>\n"
+            f"<b>Author:</b> @{data.get('author')}\n"
+            f"<b>Message:</b> <code>{data.get('commit_message')}</code>\n\n"
+            f"⚠️ <i>Сборка завершилась аварийно! Требуется ручная проверка кода.</i>\n\n"
+            f"🔗 <a href='{data.get('url')}'>Inspect Failure Details</a>"
+        )
+        try:
+            await self.bot.send_message(
+                chat_id=self.admin_id,
+                text=text,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+        except Exception as e:
+            logger.error(f"Notifier: Failed to send workflow failure alert: {e}")

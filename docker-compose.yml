@@ -31,5 +31,22 @@ services:
       # Перезаписываем URL для работы внутри сети Docker Compose
       - REDIS_URL=redis://redis:6379/0
 
+  webhook:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nexus-webhook
+    command: uvicorn webhook_service:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+
 volumes:
   redis_data:
