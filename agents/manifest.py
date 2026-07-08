@@ -4,39 +4,44 @@ from infra import DockerContainer, DiskResource
 
 local_transport = LocalShellTransport()
 
-# Проект 1: ImageBot (Команда, база данных, кэш)
+# Проект 1: M9 Imagebot
 imagebot_agent = ProjectAgent(
     name="imagebot",
     resources={
-        "app": DockerContainer("app", local_transport, "nexus-test-imagebot-app"),
-        "postgres": DockerContainer("postgres", local_transport, "nexus-test-imagebot-db"),
-        "redis": DockerContainer("redis", local_transport, "nexus-test-imagebot-redis")
+        "app": DockerContainer("app", local_transport, "m9_imagebot"),
+        "redis": DockerContainer("redis", local_transport, "m9_imagebot_redis"),
+        "data_disk": DiskResource("data_disk", local_transport, "/host_root/home/mageri9/apps/m9_imagebot/data")
     }
 )
 
-# Проект 2: Commit Chronicle (Приложение и мониторинг системного диска)
+# Проект 2: Tarot Bot
+tarot_agent = ProjectAgent(
+    name="tarot_bot",
+    resources={
+        "bot": DockerContainer("bot", local_transport, "tarot_bot"),
+        "postgres": DockerContainer("postgres", local_transport, "tarot_bot_postgres"),
+        "redis": DockerContainer("redis", local_transport, "tarot_bot_redis")
+    }
+)
+
+# Проект 3: Commit Chronicle
 chronicle_agent = ProjectAgent(
     name="chronicle",
     resources={
-        "app": DockerContainer("app", local_transport, "nexus-test-chronicle-app"),
-        "root_disk": DiskResource("root_disk", local_transport, "/host_root")
+        "bot": DockerContainer("bot", local_transport, "chronicle_bot"),
+        "worker": DockerContainer("worker", local_transport, "chronicle_worker"),
+        "redis": DockerContainer("redis", local_transport, "chronicle_redis"),
+        "data_disk": DiskResource("data_disk", local_transport, "/host_root/home/mageri9/apps/commit_chronicle/data")
     }
 )
 
-# Проект 3: Skillbook (Приложение и выделенная БД)
-skillbook_agent = ProjectAgent(
-    name="skillbook",
-    resources={
-        "app": DockerContainer("app", local_transport, "nexus-test-skillbook-app"),
-        "postgres": DockerContainer("postgres", local_transport, "nexus-test-skillbook-db")
-    }
-)
-
-# Проект 4: Nexus (Мониторинг управляющего центра)
+# Проект 4: Nexus (Мониторинг самого управляющего центра)
 nexus_agent = ProjectAgent(
     name="nexus",
     resources={
         "app": DockerContainer("app", local_transport, "nexus-core"),
+        "webhook": DockerContainer("webhook", local_transport, "nexus-webhook"),
+        "redis": DockerContainer("redis", local_transport, "nexus-redis"),
         "root_disk": DiskResource("root_disk", local_transport, "/host_root")
     }
 )

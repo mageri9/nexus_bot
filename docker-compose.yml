@@ -12,33 +12,26 @@ services:
       retries: 5
 
   nexus:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # Использует собранный в GHCR образ. Если переменной нет, подставит дефолт
+    image: ${GHCR_IMAGE_NAME:-ghcr.io/mageri9/nexus}:latest
     container_name: nexus-core
     restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
     volumes:
-      # Проброс Docker сокета для DooD
       - /var/run/docker.sock:/var/run/docker.sock
-      # Монтирование корневой ФС хоста в режиме 'только чтение' для мониторинга дисков
       - /:/host_root:ro
     env_file:
       - .env
     environment:
-      # Перезаписываем URL для работы внутри сети Docker Compose
       - REDIS_URL=redis://redis:6379/0
 
   webhook:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # Использует тот же образ, но переопределяет команду запуска на uvicorn
+    image: ${GHCR_IMAGE_NAME:-ghcr.io/mageri9/nexus}:latest
     container_name: nexus-webhook
     command: uvicorn webhook_service:app --host 0.0.0.0 --port 8000
-    ports:
-      - "8000:8000"
     restart: unless-stopped
     depends_on:
       redis:
@@ -47,6 +40,15 @@ services:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379/0
+
+  # Бесплатный HTTPS-туннель для вебхуков
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: nexus-tunnel
+    restart: unless-stopped
+    command: tunnel --url http://webhook:8000
+    depends_on:
+      - webhook
 
 volumes:
   redis_data:
