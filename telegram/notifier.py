@@ -1,3 +1,4 @@
+import html
 import asyncio
 from aiogram import Bot
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -204,18 +205,20 @@ class TelegramNotifier:
                     incident.ai_report = report
                     await redis_client.set(f"nexus:incident:detail:{inc_id}", incident.model_dump_json())
             except Exception as cache_err:
-                logger.error(f"Auto-AI: Failed to cache diagnostics in Redis for #{inc_id}: {cache_err}")
+                logger.error(
+                    f"Auto-AI: Failed to cache diagnostics in Redis for #{inc_id}: {cache_err}"
+                )
 
             # 4. Отправляем отчет в виде Reply к сообщению инцидента
             ai_text = (
                 f"🧠 <b>Автоматический ИИ-анализ инцидента #{inc_id}</b> ({project}:{resource}):\n\n"
-                f"{report}"
+                f"{html.escape(report)}"
             )
 
             await self.bot.send_message(
                 chat_id=chat_id,
                 text=ai_text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_to_message_id=message_id
             )
             logger.info(f"Auto-AI: Post-incident analysis successfully sent for #{inc_id}")
