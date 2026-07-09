@@ -13,13 +13,13 @@ class PubSubListener:
 
     def start(self) -> None:
         """Запускает бесконечный цикл прослушивания Redis Pub/Sub"""
-        logger.info("Starting background Redis Pub/Sub DevOps listener...")
+        logger.info("Starting background Redis Pub/Sub DevOps & Telemetry listener...")
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
         """Грациозно останавливает фоновую задачу прослушивания"""
         if self._task:
-            logger.info("Stopping Redis Pub/Sub DevOps listener...")
+            logger.info("Stopping Redis Pub/Sub DevOps & Telemetry listener...")
             self._task.cancel()
             try:
                 await self._task
@@ -30,7 +30,8 @@ class PubSubListener:
         while True:
             try:
                 pubsub = self.redis.pubsub()
-                await pubsub.subscribe("nexus:pubsub:devops")
+                # Подписываемся на несколько каналов одновременно (Event Hub)
+                await pubsub.subscribe("nexus:pubsub:devops", "nexus:pubsub:telemetry")
 
                 while True:
                     message = await pubsub.get_message(
