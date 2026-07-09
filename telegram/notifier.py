@@ -61,20 +61,43 @@ class TelegramNotifier:
         # Проверка режима тишины (Silence)
         silence_key = f"nexus:silence:{project}:{resource}"
         if await redis_client.exists(silence_key):
-            logger.info(f"Notifier: Alert for incident #{inc_id} suppressed due to active 1h silence.")
+            logger.info(
+                f"Notifier: Alert for incident #{inc_id} suppressed due to active 1h silence."
+            )
             return
 
-        # Динамическое извлечение последних CPU/RAM метрик из кэша коллектора
+        # Динамическое извлечение последних CPU/RAM метрик из кэша коллектора (с поддержкой State V2)
         cpu = "N/A"
         ram = "N/A"
         try:
             cached_details = await query_service.get_agent_details(project)
-            res_details = cached_details.get(resource, {})
-            metrics = res_details.get("metrics", {})
-            cpu = metrics.get("cpu", "N/A")
-            ram = metrics.get("memory", "N/A")
+            if cached_details.get("version") == 2:
+                # Ищем ресурс в контейнерах, а если его там нет — во внешних хранилищах
+                res_details = cached_details.get("containers", {}).get(resource)
+                if not res_details:
+                    res_details = cached_details.get("storage", {}).get(resource)
+
+                if res_details:
+                    metrics = res_details.get("metrics", {})
+
+                    # Извлекаем данные из структуры Metric V2 (значение лежит во вложенном ключе "value")
+                    cpu_metric = metrics.get("cpu", {})
+                    cpu = (
+                        cpu_metric.get("value", "N/A")
+                        if isinstance(cpu_metric, dict)
+                        else cpu_metric
+                    )
+
+                    ram_metric = metrics.get("memory", {})
+                    ram = (
+                        ram_metric.get("value", "N/A")
+                        if isinstance(ram_metric, dict)
+                        else ram_metric
+                    )
         except Exception as e:
-            logger.debug(f"Notifier: Failed to fetch real-time metrics for incident alert: {e}")
+            logger.debug(
+                f"Notifier: Failed to fetch real-time metrics for incident alert: {e}"
+            )
 
         # Обрезка логов под лимиты Telegram-сообщений
         logs_preview = "\n".join(logs.strip().split("\n")[-15:])
