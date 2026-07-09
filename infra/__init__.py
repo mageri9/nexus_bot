@@ -1,2 +1,2 @@
 from .docker import DockerContainer
-from .disk import DiskResource
+from .disk import HostDiskResource, ProjectStorageResource
