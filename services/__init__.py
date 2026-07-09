@@ -40,3 +40,7 @@ ai_service = AIService(
 
 # Подписываем AI Service на события использования токенов (как внутренних, так и внешних через Pub/Sub)
 event_bus.subscribe("ai.request", ai_service.on_ai_request)
+
+# Подписываем IncidentService на сборки для логирования в общую ленту событий хоста
+event_bus.subscribe("devops:workflow_success", incident_service.on_devops_event)
+event_bus.subscribe("devops:workflow_failure", incident_service.on_devops_event)
