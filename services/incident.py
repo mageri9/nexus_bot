@@ -82,7 +82,7 @@ class IncidentService:
         incident_id = f"{incident_num}"
 
         # Атомарная блокировка (SET NX с TTL 1 час)
-        acquired = await self.redis.set(active_key, incident_id, nx=True, ex=3600)
+        acquired = await self.redis.set(active_key, incident_id, nx=True)
         if not acquired:
             logger.debug(
                 f"Incident for {project}:{resource} is already open. Skipping."
