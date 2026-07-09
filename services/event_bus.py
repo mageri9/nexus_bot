@@ -22,7 +22,13 @@ class EventBus:
         logger.debug(f"EventBus: Publishing event '{event_type}' with payload: {data}")
         subscribers = self._subscribers.get(event_type, [])
 
-        # Создаем задачи для параллельного уведомления всех подписчиков [1]
+        # Создаем задачи для параллельного уведомления всех подписчиков
         tasks = [sub(event_type, data) for sub in subscribers]
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in results:
+                if isinstance(res, Exception):
+                    logger.error(
+                        f"EventBus: Exception in subscriber for event '{event_type}': {res}",
+                        exc_info=res
+                    )
