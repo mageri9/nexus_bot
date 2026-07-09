@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 from redis.asyncio import Redis
 from loguru import logger
@@ -29,21 +29,59 @@ class IncidentService:
         self.query_service = query_service
         self.event_bus = event_bus
 
+    async def add_to_timeline(self, text: str, severity: str = "INFO") -> None:
+        """Добавляет событие в хронологическую ленту хоста (Datadog-lite)"""
+        try:
+            now = datetime.now(timezone.utc)
+            payload = {"timestamp": now.isoformat(), "text": text, "severity": severity}
+            score = now.timestamp()
+
+            # Добавляем в Sorted Set в Redis
+            await self.redis.zadd(
+                "nexus:timeline", {json.dumps(payload, ensure_ascii=False): score}
+            )
+
+            # Ротируем ленту: оставляем только последние 50 записей для экономии памяти
+            await self.redis.zremrangebyrank("nexus:timeline", 0, -51)
+
+            logger.debug(f"Timeline: Added [{severity}] event: {text}")
+        except Exception as e:
+            logger.error(f"Failed to add event to timeline: {e}")
+
+    async def get_timeline(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Возвращает N последних событий из хронологической ленты"""
+        try:
+            # Запрашиваем элементы в обратном порядке (от свежих к старым)
+            raw_elements = await self.redis.zrevrange("nexus:timeline", 0, limit - 1)
+            return [json.loads(el) for el in raw_elements]
+        except Exception as e:
+            logger.error(f"Failed to fetch timeline: {e}")
+            return []
+
+    async def on_devops_event(self, event_type: str, data: dict) -> None:
+        """Обработчик успешных/упавших CI/CD пайплайнов для фиксации в ленте"""
+        repo = data.get("repository", "unknown")
+        workflow = data.get("workflow_name", "pipeline")
+        author = data.get("author", "unknown")
+
+        if event_type == "devops:workflow_success":
+            text = f"🚀 CI/CD: Сборка {repo} ({workflow}) успешно завершена. Автор: @{author}"
+            await self.add_to_timeline(text, "SUCCESS")
+        elif event_type == "devops:workflow_failure":
+            text = f"❌ CI/CD: Пайплайн {repo} ({workflow}) упал! Автор: @{author}"
+            await self.add_to_timeline(text, "WARNING")
+
     async def on_resource_failed(self, event_type: str, data: dict) -> None:
         project = data["agent"]
         resource = data["resource"]
         new_status = data["new_status"]
-        metrics = data.get("metrics", {})
 
         active_key = f"nexus:incident:active:{project}:{resource}"
 
         incident_num = await self.redis.incr("nexus:incident:counter")
         incident_id = f"{incident_num}"
 
-        # Атомарно "занимаем" active_key. TTL — страховка на случай,
-        # если процесс упадёт между этим SET и записью detail_key ниже:
-        # без TTL ресурс навсегда застрял бы в состоянии "инцидент открыт"
-        # и повторные падения молча игнорировались бы.
+        # Атомарная блокировка (SET NX с TTL 1 час)
         acquired = await self.redis.set(active_key, incident_id, nx=True, ex=3600)
         if not acquired:
             logger.debug(
@@ -98,6 +136,12 @@ class IncidentService:
         )
         await self.redis.lpush("nexus:incidents:history", incident_id)
 
+        # Пишем инцидент в ленту событий хоста
+        await self.add_to_timeline(
+            f"🚨 Сбой ресурса {project}:{resource} (рестарты: {restart_count})",
+            severity=severity,
+        )
+
         logger.info(
             f"🚨 IncidentService: Created Incident #{incident_id} for {project}:{resource}"
         )
@@ -142,6 +186,17 @@ class IncidentService:
         # Сохраняем обновленный инцидент
         await self.redis.set(detail_key, incident.model_dump_json())
 
+        # Пишем восстановление в ленту событий хоста
+        duration_str = (
+            f"{incident.duration:.1f}с"
+            if incident.duration < 60
+            else f"{int(incident.duration // 60)}м {int(incident.duration % 60)}с"
+        )
+        await self.add_to_timeline(
+            f"✅ Восстановлен ресурс {project}:{resource} (простой: {duration_str})",
+            severity="SUCCESS",
+        )
+
         logger.info(
             f"✅ IncidentService: Incident #{incident_id} resolved. Outage duration: {incident.duration}s"
         )
@@ -164,7 +219,4 @@ class IncidentService:
             inc = await self.get_incident(inc_id)
             if inc:
                 incidents.append(inc)
-            else:
-                # Очистка невалидных указателей из истории, если применимо
-                pass
         return incidents
