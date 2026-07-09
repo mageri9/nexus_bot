@@ -77,14 +77,13 @@ def format_size(bytes_val: int) -> str:
 
 
 async def get_total_ai_usage() -> dict:
-    """Сканирует хэши в Redis и суммирует потребление ИИ во всей экосистеме"""
+    """Безопасно сканирует хэши в Redis и суммирует потребление ИИ во всей экосистеме"""
     try:
-        keys = await redis_client.keys("nexus:telemetry:ai:*")
         total_prompt = 0
         total_completion = 0
         total_requests = 0
-        for k in keys:
-            data = await redis_client.hgetall(k)
+        async for key in redis_client.scan_iter("nexus:telemetry:ai:*"):
+            data = await redis_client.hgetall(key)
             total_prompt += int(data.get("prompt_tokens", 0))
             total_completion += int(data.get("completion_tokens", 0))
             total_requests += int(data.get("requests", 0))
@@ -92,7 +91,7 @@ async def get_total_ai_usage() -> dict:
             "prompt": total_prompt,
             "completion": total_completion,
             "total": total_prompt + total_completion,
-            "requests": total_requests,
+            "requests": total_requests
         }
     except Exception as e:
         logger.error(f"Failed to calculate AI total usage: {e}")
@@ -301,32 +300,30 @@ async def build_agent_detail_content(
 
 
 async def build_global_stats_content() -> tuple[str, types.InlineKeyboardMarkup]:
-    """Генерирует экран сквозной аналитики ИИ и инцидентов"""
+    """Генерирует экран сквозной аналитики ИИ и инцидентов через безопасный SCAN"""
     report_lines = [
         "📊 <b>Ecosystem AI & Incident Analytics</b>\n",
-        "<b>AI Consumption Statistics (Total):</b>",
+        "<b>AI Consumption Statistics (Total):</b>"
     ]
 
-    keys = await redis_client.keys("nexus:telemetry:ai:*")
-    if keys:
-        for k in keys:
-            parts = k.split(":")
-            project = parts[3].upper() if len(parts) >= 4 else "UNKNOWN"
-            provider = parts[4] if len(parts) >= 5 else "UNKNOWN"
-            model = parts[5] if len(parts) >= 6 else "UNKNOWN"
+    has_keys = False
+    # Безопасное сканирование ключей телеметрии
+    async for key in redis_client.scan_iter("nexus:telemetry:ai:*"):
+        has_keys = True
+        parts = key.split(":")
+        project = parts[3].upper() if len(parts) >= 4 else "UNKNOWN"
+        provider = parts[4] if len(parts) >= 5 else "UNKNOWN"
+        model = parts[5] if len(parts) >= 6 else "UNKNOWN"
 
-            data = await redis_client.hgetall(k)
-            prompt = int(data.get("prompt_tokens", 0))
-            completion = int(data.get("completion_tokens", 0))
-            reqs = int(data.get("requests", 0))
+        data = await redis_client.hgetall(key)
+        prompt = int(data.get("prompt_tokens", 0))
+        completion = int(data.get("completion_tokens", 0))
+        reqs = int(data.get("requests", 0))
 
-            report_lines.append(
-                f"├─ <b>{project}</b> (via <code>{provider}/{model}</code>)"
-            )
-            report_lines.append(
-                f"│  └─ Prompt: {prompt} | Compl: {completion} (Reqs: {reqs})"
-            )
-    else:
+        report_lines.append(f"├─ <b>{project}</b> (via <code>{provider}/{model}</code>)")
+        report_lines.append(f"│  └─ Prompt: {prompt} | Compl: {completion} (Reqs: {reqs})")
+
+    if not has_keys:
         report_lines.append("  <i>No AI usage stats found.</i>")
 
     report_lines.append("\n<b>Recent Incidents (History):</b>")
