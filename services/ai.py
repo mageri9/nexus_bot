@@ -1,13 +1,19 @@
 import json
 from openai import AsyncOpenAI
-from loguru import logger  # [1]
+from loguru import logger
 from config import settings
 from services.query import QueryService
+from services.event_bus import EventBus
+from redis.asyncio import Redis
 
 
 class AIService:
-    def __init__(self, query_service: QueryService):
+    def __init__(
+        self, query_service: QueryService, event_bus: EventBus, redis_client: Redis
+    ):
         self.query_service = query_service
+        self.event_bus = event_bus
+        self.redis = redis_client
         self._client = None
 
     @property
@@ -21,6 +27,44 @@ class AIService:
             # Подключаемся к AITUNNEL через OpenAI-совместимый SDK
             self._client = AsyncOpenAI(api_key=key, base_url=settings.AITUNNEL_BASE_URL)
         return self._client
+
+    async def record_usage(
+        self,
+        project: str,
+        provider: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> None:
+        """Сохраняет структурированную телеметрию использования ИИ в Redis"""
+        try:
+            # Структура ключа: nexus:telemetry:ai:{project}:{provider}:{model}
+            key = f"nexus:telemetry:ai:{project}:{provider}:{model}"
+
+            async with self.redis.pipeline() as pipe:
+                pipe.hincrby(key, "prompt_tokens", prompt_tokens)
+                pipe.hincrby(key, "completion_tokens", completion_tokens)
+                pipe.hincrby(key, "requests", 1)
+                await pipe.execute()
+
+            logger.debug(
+                f"AI Telemetry: Recorded {prompt_tokens}p/{completion_tokens}c tokens "
+                f"for {project} ({provider}:{model})"
+            )
+        except Exception as e:
+            logger.error(f"Failed to record AI telemetry: {e}")
+
+    async def on_ai_request(self, event_type: str, data: dict) -> None:
+        """Обработчик события ai.request из шины EventBus"""
+        project = data.get("project", "unknown")
+        provider = data.get("provider", "unknown")
+        model = data.get("model", "unknown")
+        prompt_tokens = data.get("prompt_tokens", 0)
+        completion_tokens = data.get("completion_tokens", 0)
+
+        await self.record_usage(
+            project, provider, model, prompt_tokens, completion_tokens
+        )
 
     async def analyze_system(self, user_query: str) -> str:
         """
@@ -94,5 +138,19 @@ class AIService:
             temperature=0.3,
             max_tokens=800,
         )
+
+        # Публикуем событие расхода токенов для аналитического запроса
+        usage = response.usage
+        if usage:
+            await self.event_bus.publish(
+                "ai.request",
+                {
+                    "project": "nexus",
+                    "provider": "aitunnel",
+                    "model": settings.AITUNNEL_MODEL,
+                    "prompt_tokens": usage.prompt_tokens,
+                    "completion_tokens": usage.completion_tokens,
+                },
+            )
 
         return response.choices[0].message.content
