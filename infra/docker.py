@@ -9,7 +9,6 @@ class DockerContainer(Resource):
     def __init__(self, name: str, transport: Transport, container_name: str) -> None:
         super().__init__(name, transport)
         self.container_name = container_name
-        # Декларируем возможности контейнера
         self.capabilities = ["restart", "logs"]
 
     async def get_status(self) -> str:
@@ -35,13 +34,13 @@ class DockerContainer(Resource):
                 ]
             )
 
-            # 2. Запрос рестартов и даты старта за один вызов inspect (уменьшает накладные расходы)
+            # 2. Запрос рестартов и даты старта с правильными путями в шаблоне
             inspect_output = await self.transport.run(
                 [
                     "docker",
                     "inspect",
                     "-f",
-                    "{{.State.RestartCount}}|{{.State.StartedAt}}",
+                    "{{.RestartCount}}|{{.State.StartedAt}}",
                     self.container_name,
                 ]
             )
@@ -58,13 +57,17 @@ class DockerContainer(Resource):
 
                 try:
                     started_at_raw = inspect_parts[1]
-                    # Отсекаем наносекунды для безопасного парсинга в ISO-формат
+                    # Безопасно отсекаем наносекунды для парсинга в ISO-формат
                     started_at_clean = started_at_raw.split(".")[0]
+                    if started_at_clean.endswith("Z"):
+                        started_at_clean = started_at_clean[:-1]
+
                     started_at_dt = datetime.fromisoformat(started_at_clean).replace(
                         tzinfo=timezone.utc
                     )
-
                     now = datetime.now(timezone.utc)
+
+                    # Храним строго секунды (целое число), форматирование выполнит UI
                     uptime_seconds = int((now - started_at_dt).total_seconds())
                     if uptime_seconds < 0:
                         uptime_seconds = 0
@@ -85,7 +88,7 @@ class DockerContainer(Resource):
 
             now_ts = datetime.now(timezone.utc)
 
-            # Возвращаем строго структурированные объекты Metric
+            # Сериализуем всё в json-совместимые типы через mode="json" (исключает datetime в Redis)
             return {
                 "cpu": Metric(
                     key="cpu",
@@ -93,35 +96,35 @@ class DockerContainer(Resource):
                     unit="percent",
                     source="docker_stats",
                     timestamp=now_ts,
-                ).model_dump(),
+                ).model_dump(mode="json"),
                 "mem_perc": Metric(
                     key="mem_perc",
                     value=mem_perc,
                     unit="percent",
                     source="docker_stats",
                     timestamp=now_ts,
-                ).model_dump(),
+                ).model_dump(mode="json"),
                 "memory": Metric(
                     key="memory",
                     value=memory,
                     unit="human_readable",
                     source="docker_stats",
                     timestamp=now_ts,
-                ).model_dump(),
+                ).model_dump(mode="json"),
                 "restarts": Metric(
                     key="restarts",
                     value=restarts,
                     unit="counter",
                     source="docker_inspect",
                     timestamp=now_ts,
-                ).model_dump(),
+                ).model_dump(mode="json"),
                 "uptime_seconds": Metric(
                     key="uptime_seconds",
                     value=uptime_seconds,
                     unit="seconds",
                     source="docker_inspect",
                     timestamp=now_ts,
-                ).model_dump(),
+                ).model_dump(mode="json"),
             }
 
         except Exception as e:

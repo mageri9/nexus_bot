@@ -1,3 +1,4 @@
+# infra/disk.py
 from datetime import datetime, timezone
 from typing import Dict, Any
 from core.resource import Resource
@@ -39,7 +40,8 @@ class HostDiskResource(Resource):
                         source="df",
                         timestamp=datetime.now(timezone.utc)
                     )
-                    return {"partition_size": metric.model_dump()}
+                    # Использование mode="json" для сериализации datetime в строку
+                    return {"partition_size": metric.model_dump(mode="json")}
             return {"error": f"Failed to parse df output: {df_output}"}
         except Exception as e:
             return {"error": str(e)}
@@ -75,7 +77,8 @@ class ProjectStorageResource(Resource):
                     source="du",
                     timestamp=datetime.now(timezone.utc)
                 )
-                return {"directory_size": metric.model_dump()}
+                # Использование mode="json" для сериализации datetime в строку
+                return {"directory_size": metric.model_dump(mode="json")}
             return {"error": f"Failed to parse du output: {du_output}"}
         except Exception as e:
             return {"error": str(e)}
