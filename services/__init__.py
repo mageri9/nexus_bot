@@ -9,10 +9,12 @@ from .collector import StateCollector
 from .ai import AIService
 from .incident import IncidentService
 from .pubsub_listener import PubSubListener
+from .health_engine import HealthEngine
 
 redis_client = Redis.from_url(settings.REDIS_URL, decode_responses=True)
 
-query_service = QueryService(registry=registry, redis_client=redis_client)
+health_engine = HealthEngine()
+query_service = QueryService(registry=registry, redis_client=redis_client, health_engine=health_engine)
 event_bus = EventBus()
 command_service = CommandService(registry=registry, event_bus=event_bus)
 state_collector = StateCollector(registry=registry, redis_client=redis_client, event_bus=event_bus)
