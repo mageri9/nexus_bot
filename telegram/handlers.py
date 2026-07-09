@@ -111,18 +111,20 @@ async def build_dashboard_content() -> tuple[str, types.InlineKeyboardMarkup]:
         agent_details = await query_service.get_agent_details(agent_name)
         score = query_service.calculate_health_score(agent_name, agent_details)
 
-        if score >= 90:
-            score_emoji = "🟢"
-        elif score >= 70:
-            score_emoji = "🟡"
+        # Обработка маркера инициализации
+        if score == -1:
+            score_emoji = "⚪"
+            score_str = "N/A"
         else:
-            score_emoji = "🔴"
+            score_str = f"{score}%"
+            if score >= 90:
+                score_emoji = "🟢"
+            elif score >= 70:
+                score_emoji = "🟡"
+            else:
+                score_emoji = "🔴"
 
-        report_lines.append(
-            f"{score_emoji} <b>{agent_name.upper()}</b> | Health: <b>{score}%</b>"
-        )
-
-    report_lines.append("")
+        report_lines.append(f"{score_emoji} <b>{agent_name.upper()}</b> | Health: <b>{score_str}</b>")
 
     # 1. Извлечение емкости системного диска
     nexus_details = await query_service.get_agent_details("nexus")
@@ -183,24 +185,28 @@ async def build_dashboard_content() -> tuple[str, types.InlineKeyboardMarkup]:
     return "\n".join(report_lines), keyboard_builder.as_markup()
 
 
-async def build_agent_detail_content(
-    agent_name: str,
-) -> tuple[str, types.InlineKeyboardMarkup]:
+async def build_agent_detail_content(agent_name: str) -> tuple[str, types.InlineKeyboardMarkup]:
     """Генерирует детальную панель Слоя 2 (Agent Drill-down)"""
     agent_details = await query_service.get_agent_details(agent_name)
     score = query_service.calculate_health_score(agent_name, agent_details)
 
-    if score >= 90:
-        score_emoji = "🟢"
-    elif score >= 70:
-        score_emoji = "🟡"
+    # Обработка маркера инициализации
+    if score == -1:
+        score_emoji = "⚪"
+        score_str = "N/A"
     else:
-        score_emoji = "🔴"
+        score_str = f"{score}%"
+        if score >= 90:
+            score_emoji = "🟢"
+        elif score >= 70:
+            score_emoji = "🟡"
+        else:
+            score_emoji = "🔴"
 
     report_lines = [
         f"{score_emoji} <b>{agent_name.upper()} Agent Panel</b>",
-        f"Health Score: <b>{score}%</b>\n",
-        "<b>Status Details:</b>",
+        f"Health Score: <b>{score_str}</b>\n",
+        "<b>Status Details:</b>"
     ]
 
     keyboard_builder = InlineKeyboardBuilder()
