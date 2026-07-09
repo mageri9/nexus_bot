@@ -104,6 +104,11 @@ class TelegramNotifier:
         if len(logs_preview) > 800:
             logs_preview = logs_preview[-800:]
 
+        # Экранируем логи, чтобы исключить падение парсера HTML на символах <, >, &
+        import html
+
+        logs_preview_escaped = html.escape(logs_preview)
+
         text = (
             f"🚨 <b>INCIDENT #{inc_id}</b>\n\n"
             f"<b>Project:</b> <code>{project.upper()}</code>\n"
@@ -113,7 +118,7 @@ class TelegramNotifier:
             f"<b>CPU:</b> <code>{cpu}</code> | <b>RAM:</b> <code>{ram}</code>\n\n"
             f"<b>Reason:</b> <code>{reason}</code>\n\n"
             f"📝 <b>Last Logs Preview:</b>\n"
-            f"<pre>{logs_preview}</pre>"
+            f"<pre>{logs_preview_escaped}</pre>"
         )
 
         # Клавиатура управления инцидентом (Кнопка AI Diagnose сохраняется для повторных ручных вызовов)
