@@ -1,5 +1,7 @@
+from datetime import datetime, timezone
 from typing import Dict, Any
 from core.resource import Resource
+from core.telemetry import Metric
 from transports.base import Transport
 
 
@@ -7,6 +9,8 @@ class DockerContainer(Resource):
     def __init__(self, name: str, transport: Transport, container_name: str) -> None:
         super().__init__(name, transport)
         self.container_name = container_name
+        # Декларируем возможности контейнера
+        self.capabilities = ["restart", "logs"]
 
     async def get_status(self) -> str:
         try:
@@ -19,7 +23,7 @@ class DockerContainer(Resource):
 
     async def get_metrics(self) -> Dict[str, Any]:
         try:
-            # 1. Запрос утилизации CPU и RAM в процентах, а также физического объема
+            # 1. Запрос утилизации CPU и RAM
             stats_output = await self.transport.run(
                 [
                     "docker",
@@ -31,44 +35,93 @@ class DockerContainer(Resource):
                 ]
             )
 
-            # 2. Запрос текущего количества перезапусков контейнера
-            restarts_output = await self.transport.run(
+            # 2. Запрос рестартов и даты старта за один вызов inspect (уменьшает накладные расходы)
+            inspect_output = await self.transport.run(
                 [
                     "docker",
                     "inspect",
                     "-f",
-                    "{{.State.RestartCount}}",
+                    "{{.State.RestartCount}}|{{.State.StartedAt}}",
                     self.container_name,
                 ]
             )
 
             restarts = 0
-            try:
-                restarts = int(restarts_output.strip())
-            except Exception:
-                pass
+            uptime_seconds = 0
+            inspect_parts = inspect_output.strip().split("|")
 
-            if not stats_output:
-                return {
-                    "cpu": "0.00%",
-                    "mem_perc": "0.00%",
-                    "memory": "0MiB / 0MiB",
-                    "restarts": restarts,
-                }
+            if len(inspect_parts) >= 2:
+                try:
+                    restarts = int(inspect_parts[0])
+                except ValueError:
+                    pass
 
-            parts = stats_output.split("|")
-            if len(parts) >= 3:
-                return {
-                    "cpu": parts[0].strip(),
-                    "mem_perc": parts[1].strip(),
-                    "memory": parts[2].strip(),
-                    "restarts": restarts,
-                }
+                try:
+                    started_at_raw = inspect_parts[1]
+                    # Отсекаем наносекунды для безопасного парсинга в ISO-формат
+                    started_at_clean = started_at_raw.split(".")[0]
+                    started_at_dt = datetime.fromisoformat(started_at_clean).replace(
+                        tzinfo=timezone.utc
+                    )
+
+                    now = datetime.now(timezone.utc)
+                    uptime_seconds = int((now - started_at_dt).total_seconds())
+                    if uptime_seconds < 0:
+                        uptime_seconds = 0
+                except Exception:
+                    pass
+
+            # Парсинг stats
+            cpu = "0.00%"
+            mem_perc = "0.00%"
+            memory = "0MiB / 0MiB"
+
+            if stats_output:
+                stats_parts = stats_output.split("|")
+                if len(stats_parts) >= 3:
+                    cpu = stats_parts[0].strip()
+                    mem_perc = stats_parts[1].strip()
+                    memory = stats_parts[2].strip()
+
+            now_ts = datetime.now(timezone.utc)
+
+            # Возвращаем строго структурированные объекты Metric
             return {
-                "cpu": "0.00%",
-                "mem_perc": "0.00%",
-                "memory": stats_output.strip(),
-                "restarts": restarts,
+                "cpu": Metric(
+                    key="cpu",
+                    value=cpu,
+                    unit="percent",
+                    source="docker_stats",
+                    timestamp=now_ts,
+                ).model_dump(),
+                "mem_perc": Metric(
+                    key="mem_perc",
+                    value=mem_perc,
+                    unit="percent",
+                    source="docker_stats",
+                    timestamp=now_ts,
+                ).model_dump(),
+                "memory": Metric(
+                    key="memory",
+                    value=memory,
+                    unit="human_readable",
+                    source="docker_stats",
+                    timestamp=now_ts,
+                ).model_dump(),
+                "restarts": Metric(
+                    key="restarts",
+                    value=restarts,
+                    unit="counter",
+                    source="docker_inspect",
+                    timestamp=now_ts,
+                ).model_dump(),
+                "uptime_seconds": Metric(
+                    key="uptime_seconds",
+                    value=uptime_seconds,
+                    unit="seconds",
+                    source="docker_inspect",
+                    timestamp=now_ts,
+                ).model_dump(),
             }
 
         except Exception as e:
