@@ -7,8 +7,8 @@ from .event_bus import EventBus
 from .command import CommandService
 from .collector import StateCollector
 from .ai import AIService
-from .incident import IncidentService  # Импортируем новый сервис
-from .pubsub_listener import PubSubListener  # Наш новый импорт
+from .incident import IncidentService
+from .pubsub_listener import PubSubListener
 
 redis_client = Redis.from_url(settings.REDIS_URL, decode_responses=True)
 
@@ -30,4 +30,11 @@ event_bus.subscribe("ResourceStopped", incident_service.on_resource_failed)
 event_bus.subscribe("ResourceUnhealthy", incident_service.on_resource_failed)
 event_bus.subscribe("ResourceRecovered", incident_service.on_resource_recovered)
 
-ai_service = AIService(query_service=query_service)
+ai_service = AIService(
+    query_service=query_service,
+    event_bus=event_bus,
+    redis_client=redis_client
+)
+
+# Подписываем AI Service на события использования токенов (как внутренних, так и внешних через Pub/Sub)
+event_bus.subscribe("ai.request", ai_service.on_ai_request)
