@@ -198,6 +198,22 @@ class TelegramNotifier:
 
             report = response.choices[0].message.content
 
+            # Публикуем событие расхода токенов для автоматической диагностики инцидента
+            usage = response.usage
+            if usage:
+                from services import event_bus
+
+                await event_bus.publish(
+                    "ai.request",
+                    {
+                        "project": "nexus_incident",
+                        "provider": "aitunnel",
+                        "model": settings.AITUNNEL_MODEL,
+                        "prompt_tokens": usage.prompt_tokens,
+                        "completion_tokens": usage.completion_tokens,
+                    },
+                )
+
             # 3. Кэшируем полученный отчет в инцидент в Redis
             try:
                 incident = await incident_service.get_incident(inc_id)
