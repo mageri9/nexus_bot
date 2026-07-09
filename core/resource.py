@@ -1,11 +1,14 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, List
 from transports.base import Transport
 
 class Resource(ABC):
-    def __init__(self,name: str, transport: Transport):
+    def __init__(self, name: str, transport: Transport):
         self.name = name
         self.transport = transport
+        # Реестр возможностей ресурса (например: ["restart", "logs", "backup_db"])
+        # Заполняется конкретными классами-наследниками
+        self.capabilities: List[str] = []
 
     @abstractmethod
     async def get_status(self) -> str:
@@ -14,5 +17,5 @@ class Resource(ABC):
 
     @abstractmethod
     async def get_metrics(self) -> Dict[str, Any]:
-        """Возвращает словарь с сырыми метриками ресурса (CPU, RAM, uptime и т.д.)"""
+        """Возвращает словарь с объектами Metric в качестве значений"""
         pass
