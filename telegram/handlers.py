@@ -459,11 +459,13 @@ async def process_agent_action(
             )
         elif action == "backup":
             # Заглушка бэкапа (в будущем можно вызывать асинхронную команду pg_dump/sqlite vacuum)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
             await callback.message.answer(
-                f"📥 <b>Backup snapshot initialized:</b> <code>{agent}:{resource}</code>\n"
-                f"Data snapshot completed and stored successfully.",
-                parse_mode="HTML",
+                f"⚠️ <b>Backup Not Implemented</b>\n\n"
+                f"Запрошено резервное копирование <code>{agent}:{resource}</code>.\n\n"
+                f"<i>Внимание: Автоматическое создание бэкапов через UI в текущей версии Nexus не реализовано. "
+                f"Пожалуйста, используйте ручной запуск pg_dump или архивацию папок на сервере во избежание утери данных.</i>",
+                parse_mode="HTML"
             )
         else:
             await callback.answer(f"❌ Unknown action: {action}", show_alert=True)
