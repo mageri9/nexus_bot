@@ -83,8 +83,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
 
   tunnel:
-    build:
-      context: ./cloudflared
+    # Забираем предсобранный в GitHub Actions готовый образ туннеля
+    image: ${GHCR_IMAGE_NAME:-ghcr.io/mageri9/nexus}-tunnel:latest
     container_name: nexus-tunnel
     restart: unless-stopped
     env_file:
