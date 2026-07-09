@@ -1,3 +1,4 @@
+import html
 import asyncio
 from datetime import datetime
 from aiogram import Router, types, F
@@ -452,10 +453,12 @@ async def process_agent_action(
             if len(logs_preview) > 1500:
                 logs_preview = logs_preview[-1500:]
 
+            logs_preview_escaped = html.escape(logs_preview)
+
             await callback.message.answer(
                 f"📝 <b>Logs preview ({agent}:{resource}):</b>\n"
-                f"<pre>{logs_preview or 'No logs available.'}</pre>",
-                parse_mode="HTML",
+                f"<pre>{logs_preview_escaped or 'No logs available.'}</pre>",
+                parse_mode="HTML"
             )
         elif action == "backup":
             # Заглушка бэкапа (в будущем можно вызывать асинхронную команду pg_dump/sqlite vacuum)
@@ -508,9 +511,13 @@ async def process_incident_action(
         elif act == "logs":
             logs = await query_service.get_resource_logs(project, resource, limit=25)
             logs_preview = "\n".join(logs.strip().split("\n")[-15:])
+
+            logs_preview_escaped = html.escape(logs_preview)
+
             await callback.message.reply(
-                f"📝 <b>[Incident #{incident_id}] Logs:</b>\n<pre>{logs_preview}</pre>",
-                parse_mode="HTML",
+                f"📝 <b>[Incident #{incident_id}] Logs:</b>\n"
+                f"<pre>{logs_preview_escaped}</pre>",
+                parse_mode="HTML"
             )
         elif act == "ai":
             await callback.message.reply(
