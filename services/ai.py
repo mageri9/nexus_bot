@@ -35,11 +35,12 @@ class AIService:
         model: str,
         prompt_tokens: int,
         completion_tokens: int,
+        modality: str = "text",
     ) -> None:
         """Сохраняет структурированную телеметрию использования ИИ в Redis"""
         try:
             # Структура ключа: nexus:telemetry:ai:{project}:{provider}:{model}
-            key = f"nexus:telemetry:ai:{project}:{provider}:{model}"
+            key = f"nexus:telemetry:ai:{project}:{provider}:{model}:{modality}"
 
             async with self.redis.pipeline() as pipe:
                 pipe.hincrby(key, "prompt_tokens", prompt_tokens)
@@ -49,7 +50,7 @@ class AIService:
 
             logger.debug(
                 f"AI Telemetry: Recorded {prompt_tokens}p/{completion_tokens}c tokens "
-                f"for {project} ({provider}:{model})"
+                f"for {project} ({provider}:{model}:{modality})"
             )
         except Exception as e:
             logger.error(f"Failed to record AI telemetry: {e}")
@@ -61,9 +62,10 @@ class AIService:
         model = data.get("model", "unknown")
         prompt_tokens = data.get("prompt_tokens", 0)
         completion_tokens = data.get("completion_tokens", 0)
+        modality = data.get("modality", "text")
 
         await self.record_usage(
-            project, provider, model, prompt_tokens, completion_tokens
+            project, provider, model, prompt_tokens, completion_tokens, modality
         )
 
     async def analyze_system(self, user_query: str) -> str:
@@ -150,6 +152,7 @@ class AIService:
                     "model": settings.AITUNNEL_MODEL,
                     "prompt_tokens": usage.prompt_tokens,
                     "completion_tokens": usage.completion_tokens,
+                    "modality": "text",
                 },
             )
 

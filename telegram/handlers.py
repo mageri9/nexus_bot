@@ -309,7 +309,7 @@ async def build_global_stats_content() -> tuple[str, types.InlineKeyboardMarkup]
     """Генерирует экран сквозной аналитики ИИ и инцидентов через безопасный SCAN"""
     report_lines = [
         "📊 <b>Ecosystem AI & Incident Analytics</b>\n",
-        "<b>AI Consumption Statistics (Total):</b>"
+        "<b>AI Consumption Statistics (Total):</b>",
     ]
 
     has_keys = False
@@ -317,16 +317,22 @@ async def build_global_stats_content() -> tuple[str, types.InlineKeyboardMarkup]
     async for key in redis_client.scan_iter("nexus:telemetry:ai:*"):
         has_keys = True
         parts = key.split(":")
+
+        # Индексы: 0:nexus, 1:telemetry, 2:ai, 3:project, 4:provider, 5:model, 6:modality
         project = parts[3].upper() if len(parts) >= 4 else "UNKNOWN"
         provider = parts[4] if len(parts) >= 5 else "UNKNOWN"
         model = parts[5] if len(parts) >= 6 else "UNKNOWN"
+        modality = (
+            parts[6] if len(parts) >= 7 else "text"
+        )
 
         data = await redis_client.hgetall(key)
         prompt = int(data.get("prompt_tokens", 0))
         completion = int(data.get("completion_tokens", 0))
         reqs = int(data.get("requests", 0))
 
-        report_lines.append(f"├─ <b>{project}</b> (via <code>{provider}/{model}</code>)")
+        # Выводим модальность (text / vision) рядом с информацией о модели
+        report_lines.append(f"├─ <b>{project}</b> (via <code>{provider}/{model}</code> | <i>{modality}</i>)")
         report_lines.append(f"│  └─ Prompt: {prompt} | Compl: {completion} (Reqs: {reqs})")
 
     if not has_keys:

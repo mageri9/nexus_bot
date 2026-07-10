@@ -293,6 +293,7 @@ class TelegramNotifier:
                         "model": settings.AITUNNEL_MODEL,
                         "prompt_tokens": usage.prompt_tokens,
                         "completion_tokens": usage.completion_tokens,
+                        "modality": "text",
                     },
                 )
 

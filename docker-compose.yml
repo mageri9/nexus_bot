@@ -10,6 +10,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - nexus_internal
+      - nexus_shared
 
   docker-proxy:
     image: tecnativa/docker-socket-proxy:latest
@@ -99,4 +102,6 @@ volumes:
 
 networks:
   nexus_internal:
-    internal: true   # docker-proxy недоступен снаружи compose-сети вообще
+    internal: true
+  nexus_shared:
+    external: true
