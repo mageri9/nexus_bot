@@ -139,3 +139,83 @@
 * **`QueryService.get_system_status`** в ветке legacy V1-данных обращается к `res_data["status"]` без `.get()` — при повреждённом старом слепке в Redis возможен `KeyError`.
 * Без собственного домена туннель работает через Cloudflare Quick Tunnel — адрес нестабилен между рестартами; синхронизация с GitHub автоматическая, но в момент смены URL возможна кратковременная потеря CI/CD-уведомления (не влияет на основной мониторинг инфраструктуры).
 * Автотесты пока отсутствуют — логика детекции переходов состояний и дедупликации инцидентов проверялась вручную и код-ревью.
+
+
+# Тесты для Nexus
+
+Готовый набор unit-тестов для `core/`, `infra/`, `services/` (кроме `ai.py`,
+завязанного на внешний AITUNNEL API) и `webhook_service.py`. Всего **100
+тестов**, все проходят на текущей версии кода из репозитория.
+
+## Установка
+
+Скопируйте `tests/` и `pytest.ini` в корень репозитория Nexus (рядом с `main.py`),
+затем:
+
+```bash
+pip install -r requirements-dev.txt --break-system-packages   # или в venv без флага
+pytest
+```
+
+Тесты **не требуют** ни реального Redis, ни Docker, ни сети — везде, где код
+обращается к Redis, подставляется `fakeredis.FakeAsyncRedis` (in-memory,
+изолированный на каждый тест), а вместо `LocalShellTransport` — управляемый
+`ScriptedTransport` из `conftest.py`, который отвечает по заранее заданному
+сценарию.
+
+`telegram/` и `services/ai.py` намеренно не покрыты: первое — это в основном
+проводка aiogram-хендлеров с минимумом собственной логики, второе требует
+реального (или сложно мокаемого) OpenAI-совместимого клиента. Их можно
+добавить отдельно при необходимости.
+
+## Что покрыто
+
+| Файл | Что тестируется |
+|---|---|
+| `test_event_bus.py` | Публикация/подписка, изоляция по типу события, что падение одного подписчика не блокирует остальных |
+| `test_health_engine.py` | Вся математика Health Score: сбои, CPU/RAM пороги, рестарты, критические СУБД, clamp на 0, легаси V1-стейт |
+| `test_registry.py` | Регистрация агентов, дубликаты, неизвестные имена |
+| `test_docker_container.py` | Парсинг `docker inspect`/`docker stats`, устойчивость к битому выводу, restart/logs |
+| `test_disk_resources.py` | Парсинг `df`/`du`, healthy/unhealthy статусы |
+| `test_command_service.py` | Восстановление контейнера, события `action:*`, ресурсы без `restart()` |
+| `test_query_service.py` | Чтение статуса V1/V2 из кэша, работа с логами и health score |
+| `test_incident_service.py` | Открытие/закрытие инцидентов, дедупликация через `SET NX`, гонка при параллельных сбоях, таймлайн |
+| `test_collector.py` | Полная матрица переходов состояний (`ResourceStarted/Stopped/Unhealthy/Recovered/Deleted`), персист State V2 |
+| `test_webhook_service.py` | HMAC-подпись (валидная/невалидная/отсутствующая), fail-closed без секрета, диспатч `workflow_run` |
+
+## ⚠️ Два теста специально фиксируют текущие баги, а не ожидаемое поведение
+
+Они помечены суффиксом `_KNOWN_BUG` и снабжены подробным docstring:
+
+1. **`test_incident_service.py::test_active_incident_lock_has_no_ttl_KNOWN_BUG`**
+   Блокировка активного инцидента (`SET NX`) ставится без `ex=3600`, хотя
+   комментарий в коде и README утверждают обратное. Тест проверяет, что TTL
+   ключа равен `-1` (не установлен). Если это поправят — тест начнёт падать,
+   и его нужно инвертировать/удалить.
+
+2. **`test_collector.py::test_custom_other_category_resource_transitions_are_never_tracked_KNOWN_BUG`**
+   Найден в процессе написания этого набора тестов: `StateCollector`
+   раскладывает ресурсы по `containers`/`storage`/`other`, но при
+   восстановлении предыдущего состояния (`old_resources_statuses`) читает
+   только `containers` и `storage` — категория `other` игнорируется. Любой
+   кастомный `Resource` (не `DockerContainer`/`HostDiskResource`/
+   `ProjectStorageResource`) будет считаться "впервые увиденным" на **каждом**
+   тике: события `ResourceStopped`/`ResourceRecovered`/`ResourceDeleted` для
+   него никогда не сработают, а `ResourceStarted`/`ResourceUnhealthy` будут
+   публиковаться повторно каждые `interval` секунд. Сейчас в
+   `agents/manifest.py` кастомных типов нет, поэтому баг спит — но
+   "выстрелит" при добавлении нового типа ресурса, для чего явно оставлен
+   фолбек в `core/resource.py` и `services/collector.py`.
+
+Оба бага не выдуманы под тест — оба воспроизводятся на реальном коде из
+предоставленного репозитория.
+
+## Возможные доработки
+
+- Добавить интеграционный smoke-тест `telegram/handlers.py` через
+  `aiogram`'s test utilities (заглушенный `Bot`).
+- Добавить тест для `AIService.analyze_system` с замоканным `AsyncOpenAI`
+  клиентом — в первую очередь стоит проверить обрезание логов по
+  `MAX_TOTAL_LOG_CHARS` / `MAX_RESOURCES_IN_PROMPT`.
+- Прогонять `pytest` в CI (`.github/workflows/deploy.yml`) перед сборкой
+  Docker-образа — сейчас тестов в пайплайне нет вообще.
