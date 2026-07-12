@@ -317,3 +317,59 @@ async def test_on_resource_recovered_ignored_under_maintenance(
     # Инцидент должен остаться в статусе "open" (событие восстановления проигнорировано)
     incident = await incident_service.get_incident("1")
     assert incident.status == "open"
+
+
+def test_generate_fingerprint_filters_framework_frames():
+    from services.incident import IncidentService
+
+    # Имитируем traceback, где верхний фрейм (место падения) находится во фреймворке,
+    # а реальный код вызова — в пользовательском handlers.py
+    tb = (
+        "Traceback (most recent call last):\n"
+        '  File "/app/tarot_bot/handlers.py", line 45, in cmd_start\n'
+        '    await bot.send_message(chat_id, "foo")\n'
+        '  File "/usr/local/lib/python3.11/site-packages/aiogram/dispatcher/dispatcher.py", line 123, in feed_update\n'
+        "    await self._feed_update(bot, update)\n"
+        "ValueError: Mock connection issue"
+    )
+
+    fp = IncidentService.generate_fingerprint("tarot_bot", "ValueError", tb)
+    assert len(fp) == 16
+
+    # Убеждаемся, что изменение в файле пользователя порождает новый фингерпринт
+    tb2 = tb.replace("handlers.py", "handlers_new.py")
+    fp2 = IncidentService.generate_fingerprint("tarot_bot", "ValueError", tb2)
+    assert fp != fp2
+
+
+async def test_on_app_error_updates_error_registry_counts(incident_service, fake_redis):
+    payload = {
+        "project": "tarot_bot",
+        "exception_type": "KeyError",
+        "message": "missing key 'foo'",
+        "traceback": 'File "/app/tarot_bot/bot.py", line 10, in main\n  x = d["foo"]',
+    }
+
+    # Первая регистрация ошибки
+    await incident_service.on_app_error("app:error", payload)
+
+    fp = incident_service.generate_fingerprint(
+        "tarot_bot", "KeyError", payload["traceback"]
+    )
+    err_key = f"nexus:errors:{fp}"
+
+    # Заменяем строгий 'is True' на проверку истинности возвращаемого значения
+    assert await fake_redis.sismember("nexus:errors:all", fp)
+
+    err_data = await fake_redis.hgetall(err_key)
+    assert err_data["count"] == "1"
+    assert err_data["last_message"] == "missing key 'foo'"
+
+    # Имитируем прохождение времени и закрытие инцидента, чтобы открыть следующий
+    await fake_redis.delete("nexus:incident:active:tarot_bot:app")
+
+    # Повторная регистрация аналогичной ошибки
+    await incident_service.on_app_error("app:error", payload)
+
+    err_data2 = await fake_redis.hgetall(err_key)
+    assert err_data2["count"] == "2"  # Счетчик инкрементировался

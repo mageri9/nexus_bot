@@ -54,6 +54,67 @@ class StateCollector:
         if agent_name in self._pending_transitions:
             self._pending_transitions[agent_name].pop(resource_name, None)
 
+
+    async def _check_app_auto_recovery(self) -> None:
+        """Проверяет открытые инциденты приложений и автоматически закрывает их при отсутствии новых ошибок"""
+        try:
+            # Сканируем активные инциденты приложений
+            async for key in self.redis.scan_iter("nexus:incident:active:*:app"):
+                parts = key.split(":")
+                if len(parts) < 5:
+                    continue
+                project = parts[3]
+
+                incident_id = await self.redis.get(key)
+                if not incident_id:
+                    continue
+
+                # Извлекаем подробности инцидента
+                detail_raw = await self.redis.get(
+                    f"nexus:incident:detail:{incident_id}"
+                )
+                if not detail_raw:
+                    continue
+
+                incident_data = json.loads(detail_raw)
+                fingerprint = incident_data.get("fingerprint")
+                if not fingerprint:
+                    continue
+
+                # Извлекаем время последнего проявления ошибки из реестра
+                err_data = await self.redis.hgetall(f"nexus:errors:{fingerprint}")
+                if not err_data:
+                    continue
+
+                last_seen_str = err_data.get("last_seen")
+                if not last_seen_str:
+                    continue
+
+                last_seen = datetime.fromisoformat(last_seen_str)
+                now = datetime.now(timezone.utc)
+                gap = (now - last_seen).total_seconds()
+
+                # Сравниваем с порогом из настроек
+                from config import settings
+
+                threshold = getattr(settings, "APP_ERROR_AUTO_RECOVERY_THRESHOLD", 60)
+                if gap > threshold:
+                    logger.info(
+                        f"Auto-Recovery: App exception '{fingerprint}' for '{project}' did not repeat for {gap:.1f}s. "
+                        f"Resolving incident #{incident_id}."
+                    )
+                    # Помечаем ошибку как решенную в реестре
+                    await self.redis.hset(
+                        f"nexus:errors:{fingerprint}", "resolved", "1"
+                    )
+
+                    # Публикуем стандартное событие восстановления
+                    await self.event_bus.publish(
+                        "ResourceRecovered", {"agent": project, "resource": "app"}
+                    )
+        except Exception as e:
+            logger.error(f"Error during app auto-recovery execution: {e}")
+
     async def _loop(self) -> None:
         while True:
             try:
@@ -224,6 +285,9 @@ class StateCollector:
 
                     # Сохраняем версионированный слепок состояния State V2
                     await self.redis.set(key, json.dumps(state_v2))
+
+                # В конце каждого тика запускаем проверку затухания повторов исключений приложений
+                await self._check_app_auto_recovery()
 
             except Exception as e:
                 logger.error(f"Collector loop error: {e}")

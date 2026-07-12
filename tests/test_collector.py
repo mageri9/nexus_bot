@@ -462,3 +462,56 @@ async def test_log_collector_respects_buffer_limit(registry, fake_redis):
         # В Redis должны остаться только последние 3 строки
         logs_raw = await fake_redis.lrange("nexus:logs:nexus:app", 0, -1)
         assert logs_raw == ["3", "4", "5"]
+
+
+async def test_app_error_auto_recovery_resolves_stale_incident(
+    registry, fake_redis, event_bus, scripted_transport, recording_subscriber
+):
+    event_bus.subscribe("ResourceRecovered", recording_subscriber)
+
+    collector = StateCollector(
+        registry=registry,
+        redis_client=fake_redis,
+        event_bus=event_bus,
+        interval=5,
+        debounce_ticks=1,
+    )
+
+    # Симулируем открытый инцидент приложения в Redis
+    await fake_redis.set("nexus:incident:active:tarot_bot:app", "42")
+
+    incident_details = {
+        "id": "42",
+        "project": "tarot_bot",
+        "resource": "app",
+        "severity": "HIGH",
+        "status": "open",
+        "opened_at": "2026-07-12T00:00:00Z",
+        "reason": "Application Exception: KeyError",
+        "fingerprint": "mock_fp_1",
+    }
+    await fake_redis.set("nexus:incident:detail:42", json.dumps(incident_details))
+
+    # Симулируем устаревшую ошибку в Error Registry (время last_seen было 70 секунд назад при пороге 60)
+    from datetime import datetime, timezone, timedelta
+
+    stale_time = datetime.now(timezone.utc) - timedelta(seconds=70)
+
+    await fake_redis.hset(
+        "nexus:errors:mock_fp_1",
+        mapping={
+            "project": "tarot_bot",
+            "exception_type": "KeyError",
+            "last_seen": stale_time.isoformat(),
+            "count": "1",
+        },
+    )
+
+    # Запускаем проверку авто-восстановления
+    await collector._check_app_auto_recovery()
+
+    # Проверяем, что событие восстановления для tarot_bot успешно сгенерировано
+    assert recording_subscriber.types() == ["ResourceRecovered"]
+    payload = recording_subscriber.received[0][1]
+    assert payload["agent"] == "tarot_bot"
+    assert payload["resource"] == "app"

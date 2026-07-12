@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     # Конфигурация StateCollector
     COLLECTOR_DEBOUNCE_TICKS: int = 1
+    APP_ERROR_AUTO_RECOVERY_THRESHOLD: int = 60
 
     # Конфигурация шлюза AITUNNEL
     AITUNNEL_API_KEY: Optional[SecretStr] = None

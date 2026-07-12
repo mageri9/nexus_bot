@@ -1,4 +1,6 @@
 import json
+import re
+import hashlib
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
@@ -22,9 +24,11 @@ class Incident(BaseModel):
     logs: Optional[str] = None  # Слепок логов на момент падения
     ai_report: Optional[str] = None  # ИИ-анализ (заполняется позже)
     restart_count: int = 0  # Количество перезапусков контейнера
+    fingerprint: Optional[str] = None # Уникальный фингерпринт ошибки для реестра дедупликации
 
 
 class IncidentService:
+
     def __init__(self, redis_client: Redis, query_service: QueryService, event_bus, classifier=None):
         self.redis = redis_client
         self.query_service = query_service
@@ -32,6 +36,40 @@ class IncidentService:
         # Лениво импортируем для полной совместимости со старыми вызовами в фикстурах тестов
         from services.classifier import Classifier
         self.classifier = classifier or Classifier(redis_client)
+
+    @staticmethod
+    def generate_fingerprint(
+        project: str, exception_type: str, traceback_str: str
+    ) -> str:
+        """Анализирует стек traceback снизу вверх, возвращая 16-значный хэш первого non-framework фрейма"""
+        # Поиск фреймов вида: File "filepath", line line_num, in func_name
+        frames = re.findall(r'File "([^"]+)", line (\d+), in (\w+)', traceback_str)
+
+        user_frame = "unknown_frame"
+        # Перебираем стек ошибок в обратном порядке (снизу вверх к источнику вызова)
+        for filepath, line_num, func_name in reversed(frames):
+            # Пропускаем библиотеки Python, виртуальные окружения и фреймворки
+            if any(
+                p in filepath
+                for p in [
+                    "site-packages",
+                    "lib/python",
+                    "aiogram",
+                    "asyncio",
+                    "importlib",
+                ]
+            ):
+                continue
+            user_frame = f"{filepath}:{line_num}:{func_name}"
+            break
+
+        # Если пользовательских файлов нет, берем нижний фрейм
+        if user_frame == "unknown_frame" and frames:
+            filepath, line_num, func_name = frames[-1]
+            user_frame = f"{filepath}:{line_num}:{func_name}"
+
+        raw_str = f"{project}:{exception_type}:{user_frame}"
+        return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()[:16]
 
     async def is_maintenance(self, project: str) -> bool:
         """Проксирует проверку обслуживания в классификатор (сохранение совместимости)"""
@@ -227,14 +265,14 @@ class IncidentService:
         await self.event_bus.publish("incident:resolved", incident.model_dump())
 
     async def on_app_error(self, event_type: str, data: dict) -> None:
-        """Регистрирует аварию на уровне приложения на основе сигнала от SDK"""
+        """Регистрирует аварию приложения на основе сигнала от SDK, дедуплицируя ее в Error Registry"""
         signal = Signal(
             project=data["project"],
             resource="app",
             source="sdk",
             event_type=event_type,
             status="error",
-            payload=data,
+            payload=data
         )
 
         cs = await self.classifier.classify(signal)
@@ -245,21 +283,49 @@ class IncidentService:
         resource = signal.resource
         severity = cs.severity
 
-        active_key = f"nexus:incident:active:{project}:{resource}"
+        # Генерация фингерпринта ошибки по traceback
+        traceback_str = data.get("traceback") or ""
+        exception_type = data.get("exception_type") or "Exception"
+        fingerprint = self.generate_fingerprint(project, exception_type, traceback_str)
 
+        now_str = datetime.now(timezone.utc).isoformat()
+        err_key = f"nexus:errors:{fingerprint}"
+
+        # 1. Запись в Error Registry в Redis
+        exists = await self.redis.exists(err_key)
+        if not exists:
+            # Первая регистрация ошибки
+            await self.redis.hset(err_key, mapping={
+                "project": project,
+                "exception_type": exception_type,
+                "first_seen": now_str,
+                "last_seen": now_str,
+                "count": "1",
+                "last_message": data.get("message") or "",
+                "resolved": "0"
+            })
+            await self.redis.sadd("nexus:errors:all", fingerprint)
+        else:
+            # Обновление счетчиков повторений ошибки
+            async with self.redis.pipeline() as pipe:
+                pipe.hincrby(err_key, "count", 1)
+                pipe.hset(err_key, "last_seen", now_str)
+                pipe.hset(err_key, "last_message", data.get("message") or "")
+                pipe.hset(err_key, "resolved", "0")  # Сбрасываем флаг завершения, если ошибка вернулась
+                await pipe.execute()
+
+        # 2. Создание инцидента
+        active_key = f"nexus:incident:active:{project}:{resource}"
         incident_num = await self.redis.incr("nexus:incident:counter")
         incident_id = f"{incident_num}"
 
-        # Атомарный лок, чтобы не плодить дубли инцидентов по приложению
         acquired = await self.redis.set(active_key, incident_id, nx=True)
         if not acquired:
-            logger.debug(
-                f"Incident for {project}:{resource} is already open. Skipping."
-            )
+            logger.debug(f"Incident for {project}:{resource} is already open. Skipping.")
             return
 
-        logs = data.get("traceback") or "No traceback provided."
-        reason = f"Application Exception: {data.get('exception_type')} - {data.get('message')}"
+        logs = traceback_str or "No traceback provided."
+        reason = f"Application Exception: {exception_type} - {data.get('message')}"
 
         incident = Incident(
             id=incident_id,
@@ -271,6 +337,7 @@ class IncidentService:
             reason=reason,
             logs=logs,
             restart_count=0,
+            fingerprint=fingerprint
         )
 
         await self.redis.set(
@@ -279,7 +346,7 @@ class IncidentService:
         await self.redis.lpush("nexus:incidents:history", incident_id)
 
         await self.add_to_timeline(
-            f"🚨 Ошибка приложения {project.upper()}: {data.get('exception_type')}",
+            f"🚨 Ошибка приложения {project.upper()}: {exception_type}",
             severity=severity,
         )
 
