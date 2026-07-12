@@ -25,7 +25,8 @@ KNOWN_EVENTS = [
     "action:failed",
     "incident:opened",
     "incident:resolved",
-    "ai.request"
+    "ai.request",
+    "ml:anomaly_detected",
 ]
 
 
@@ -76,13 +77,23 @@ class IntelligenceCollector:
 
         except Exception as ex:
             # Ошибка логируется, но не прерывает работу EventBus
-            logger.error(f"IntelligenceCollector failed to capture event '{event_type}': {ex}")
+            logger.error(
+                f"IntelligenceCollector failed to capture event '{event_type}': {ex}"
+            )
 
-    async def _parse_event_meta(self, event_type: str, payload: Dict[str, Any]) -> tuple[str, str, str, str]:
+    async def _parse_event_meta(
+        self, event_type: str, payload: Dict[str, Any]
+    ) -> tuple[str, str, str, str]:
         """
         Разбирает метаданные события и обогащает их на основе классификатора.
         Возвращает кортеж: (project, resource, severity, source)
         """
+        # Обработка события аномалии
+        if event_type == "ml:anomaly_detected":
+            project = payload.get("project", "unknown")
+            resource = payload.get("resource", "unknown")
+            return project, resource, "WARNING", "intelligence"
+
         # 1. Сценарий: События, совместимые с сигналами (проходят классификатор)
         signal_compatible = {
             "ResourceStarted", "ResourceStopped", "ResourceUnhealthy", "ResourceRecovered", "ResourceDeleted",

@@ -161,6 +161,13 @@ class StateCollector:
                         except Exception as e:
                             metrics = {"error": str(e)}
 
+                        # Выявление аномалий для контейнеров перед сохранением нового снимка
+                        if hasattr(resource, "container_name"):
+                            try:
+                                await self._check_and_publish_anomalies(agent_name, res_name, metrics)
+                            except Exception as ex:
+                                logger.error(f"Collector anomaly detection failed for {agent_name}:{res_name}: {ex}")
+
                         committed_status = old_resources_statuses.get(res_name)
 
                         # Применение дебаунса переходов состояний
@@ -288,14 +295,14 @@ class StateCollector:
 
                     await self.redis.set(key, json.dumps(state_v2))
 
-                    # Сохранение снимков метрик
+                    # Сохранение снимков метрик (запись в SQLite)
                     if self.event_storage:
                         try:
                             await self._save_snapshots_for_agent(state_v2)
                         except Exception as e:
                             logger.error(f"Collector: Failed to save metric snapshots: {e}")
 
-                    # Расчет Health Score и запись во временной ряд в Redis
+                    # 4. Расчет Health Score и запись во временной ряд в Redis
                     score = self.health_engine.calculate_score(state_v2)
                     if score != -1:  # Игнорируем маркер инициализации / отсутствия данных
                         now = datetime.now(timezone.utc)
@@ -372,9 +379,85 @@ class StateCollector:
                 status=status,
                 cpu=None,
                 mem_perc=None,
-                restarts=None
+                restarts=None,
             )
             await self.event_storage.save_metric_snapshot(snapshot)
+
+
+    async def _check_and_publish_anomalies(
+        self, agent_name: str, res_name: str, metrics: dict
+    ) -> None:
+        if not self.event_storage:
+            return
+
+        # Запрашиваем историю последних снимков для этого ресурса
+        snapshots = await self.event_storage.query_metric_snapshots(
+            agent_name, res_name, limit=120
+        )
+        if not snapshots:
+            return
+
+        from intelligence.anomaly import check_anomaly, parse_float_metric
+
+        # Извлекаем историю числовых показателей нагрузки
+        cpu_history = []
+        mem_history = []
+        for snap in snapshots:
+            cpu_val = parse_float_metric(snap.cpu)
+            if cpu_val is not None:
+                cpu_history.append(cpu_val)
+            mem_val = parse_float_metric(snap.mem_perc)
+            if mem_val is not None:
+                mem_history.append(mem_val)
+
+        # Парсим текущие значения показателей
+        current_cpu, current_mem = None, None
+        if isinstance(metrics, dict):
+            cpu_data = metrics.get("cpu")
+            if isinstance(cpu_data, dict):
+                current_cpu = parse_float_metric(cpu_data.get("value"))
+
+            mem_data = metrics.get("mem_perc")
+            if isinstance(mem_data, dict):
+                current_mem = parse_float_metric(mem_data.get("value"))
+
+        # Проверка CPU на аномалии
+        if current_cpu is not None and len(cpu_history) >= 3:
+            is_anom, mean, std = check_anomaly(current_cpu, cpu_history)
+            if is_anom:
+                logger.warning(
+                    f"Anomaly in CPU for {agent_name}:{res_name}: current={current_cpu}%, mean={mean:.2f}%, std={std:.2f}"
+                )
+                await self.event_bus.publish(
+                    "ml:anomaly_detected",
+                    {
+                        "project": agent_name,
+                        "resource": res_name,
+                        "metric": "cpu",
+                        "current_value": f"{current_cpu}%",
+                        "mean": f"{mean:.2f}%",
+                        "std": f"{std:.2f}",
+                    },
+                )
+
+        # Проверка RAM на аномалии
+        if current_mem is not None and len(mem_history) >= 3:
+            is_anom, mean, std = check_anomaly(current_mem, mem_history)
+            if is_anom:
+                logger.warning(
+                    f"Anomaly in RAM for {agent_name}:{res_name}: current={current_mem}%, mean={mean:.2f}%, std={std:.2f}"
+                )
+                await self.event_bus.publish(
+                    "ml:anomaly_detected",
+                    {
+                        "project": agent_name,
+                        "resource": res_name,
+                        "metric": "mem_perc",
+                        "current_value": f"{current_mem}%",
+                        "mean": f"{mean:.2f}%",
+                        "std": f"{std:.2f}"
+                    }
+                )
 
 
 class LogCollector:

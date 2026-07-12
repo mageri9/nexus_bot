@@ -8,6 +8,7 @@ from services.classifier import Classifier
 from intelligence.models import EventRecord
 from intelligence.storage import SqliteEventStorage
 from intelligence.collector import IntelligenceCollector
+from intelligence.anomaly import check_anomaly, parse_float_metric
 
 
 @pytest.fixture
@@ -215,3 +216,106 @@ async def test_collector_saves_metric_snapshots(
     assert snap.cpu == "15.5%"
     assert snap.mem_perc == "45.2%"
     assert snap.restarts == 2
+
+
+def test_parse_float_metric():
+    assert parse_float_metric("12.34%") == 12.34
+    assert parse_float_metric(55) == 55.0
+    assert parse_float_metric(None) is None
+    assert parse_float_metric("invalid") is None
+
+
+def test_check_anomaly_math():
+    # Стабильная история без колебаний
+    history = [10.0, 10.0, 10.0, 10.0, 10.0]
+    is_anom, _, _ = check_anomaly(100.0, history)
+    assert (
+        is_anom is False
+    )  # Стандартное отклонение слишком мало, тест отклонен во избежание шума
+
+    # Нормальные рабочие колебания
+    history_fluct = [10.0, 12.0, 11.0, 9.0, 10.0]
+    # Среднее = 10.4, Стандартное отклонение (std) ~ 1.14
+
+    # Значение в пределах нормы (Z-score < 3.0)
+    is_anom_normal, _, _ = check_anomaly(12.0, history_fluct)
+    assert is_anom_normal is False
+
+    # Аномальный всплеск (current=25.0, отклонение больше чем в 10 раз)
+    is_anom_high, mean, std = check_anomaly(25.0, history_fluct)
+    assert is_anom_high is True
+    assert mean == 10.4
+
+
+@pytest.mark.asyncio
+async def test_collector_detects_and_publishes_anomaly(temp_db_path, fake_redis, event_bus, registry):
+    from services.collector import StateCollector
+    from intelligence.collector import IntelligenceCollector
+    from intelligence.models import MetricSnapshot
+
+    # Инициализируем чистое хранилище и классификатор для теста
+    storage = SqliteEventStorage(db_path=temp_db_path)
+    classifier = Classifier(redis_client=fake_redis)
+
+    # 1. Предварительно записываем в базу историю нагрузки с небольшими колебаниями (std > 0)
+    for i in range(10):
+        cpu_val = "10.0%" if i % 2 == 0 else "11.0%"
+        snap = MetricSnapshot(
+            agent="nexus",
+            resource="app",
+            status="running",
+            cpu=cpu_val,
+            mem_perc="10.0%",
+            restarts=0
+        )
+        await storage.save_metric_snapshot(snap)
+
+    # 2. Инициализируем StateCollector
+    collector = StateCollector(
+        registry=registry,
+        redis_client=fake_redis,
+        event_bus=event_bus,
+        interval=5,
+        debounce_ticks=1,
+        event_storage=storage
+    )
+
+    # 3. Инициализируем и регистрируем в шине IntelligenceCollector
+    # Он должен поймать опубликованную аномалию и записать её в event_log
+    intel_collector = IntelligenceCollector(
+        event_bus=event_bus,
+        storage=storage,
+        classifier=classifier
+    )
+    intel_collector.register_subscriptions()
+
+    # Настраиваем локальный слушатель для верификации отправки в шину
+    published_anomalies = []
+    async def sub_anomaly(et, data):
+        published_anomalies.append(data)
+    event_bus.subscribe("ml:anomaly_detected", sub_anomaly)
+
+    # 4. Вызываем проверку аномалий напрямую с текущей пиковой нагрузкой в 95.0%
+    metrics = {
+        "cpu": {
+            "key": "cpu",
+            "value": "95.0%",
+            "unit": "percent",
+            "source": "docker_stats"
+        }
+    }
+    await collector._check_and_publish_anomalies("nexus", "app", metrics)
+
+    # 5. Проверяем, что событие аномалии было успешно опубликовано в EventBus
+    assert len(published_anomalies) == 1
+    anomaly_payload = published_anomalies[0]
+    assert anomaly_payload["project"] == "nexus"
+    assert anomaly_payload["resource"] == "app"
+    assert anomaly_payload["metric"] == "cpu"
+    assert anomaly_payload["current_value"] == "95.0%"
+
+    # 6. Проверяем, что аномалия автоматически записалась в историческую ленту событий базы данных
+    events = await storage.query(event_type="ml:anomaly_detected")
+    assert len(events) == 1
+    assert events[0].severity == "WARNING"
+    assert events[0].source == "intelligence"
