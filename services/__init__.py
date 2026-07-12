@@ -75,3 +75,15 @@ async def on_app_heartbeat(event_type: str, data: dict) -> None:
 
 # Подписываем обработчик на внутренние события шины
 event_bus.subscribe("app:heartbeat", on_app_heartbeat)
+
+# Инициализация исторической памяти Nexus Intelligence Engine
+from intelligence.storage import SqliteEventStorage
+from intelligence.collector import IntelligenceCollector
+
+event_storage = SqliteEventStorage()
+intelligence_collector = IntelligenceCollector(
+    event_bus=event_bus,
+    storage=event_storage,
+    classifier=classifier
+)
+intelligence_collector.register_subscriptions()
