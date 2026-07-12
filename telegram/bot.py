@@ -26,6 +26,9 @@ async def start_bot():
     event_bus.subscribe("incident:opened", notifier.on_incident_opened)
     event_bus.subscribe("incident:resolved", notifier.on_incident_resolved)
 
+    # Подписка на уведомления об аномалиях (ML)
+    event_bus.subscribe("ml:anomaly_detected", notifier.on_anomaly_detected)
+
     # Подписываем нотификатор на DevOps события, пришедшие из Redis Pub/Sub
     event_bus.subscribe("devops:workflow_success", notifier.on_devops_workflow_success)
     event_bus.subscribe("devops:workflow_failure", notifier.on_devops_workflow_failure)

@@ -240,4 +240,49 @@ class TelegramNotifier:
                     disable_web_page_preview=True,
                 )
             except Exception as e:
-                logger.error(f"Notifier: Failed to send failure workflow alert to admin {admin_id}: {e}")
+                logger.error(
+                    f"Notifier: Failed to send failure workflow alert to admin {admin_id}: {e}"
+                )
+
+    async def on_anomaly_detected(self, event_type: str, data: dict) -> None:
+        """
+        Оповещает администраторов об обнаружении нетипичного поведения ресурсов.
+        Учитывает активный режим тишины для подавления дублирующих уведомлений.
+        """
+        project = data.get("project", "unknown")
+        resource = data.get("resource", "unknown")
+        metric = data.get("metric", "unknown")
+        current_value = data.get("current_value", "N/A")
+        mean = data.get("mean", "N/A")
+        std = data.get("std", "N/A")
+
+        # 1. Проверяем режим тишины в Redis, чтобы не спамить
+        silence_key = f"nexus:silence:{project}:{resource}"
+        if await redis_client.exists(silence_key):
+            logger.info(
+                f"Notifier: Anomaly alert for {project}:{resource} suppressed due to active silence."
+            )
+            return
+
+        # 2. Форматируем сообщение
+        metric_display = (
+            "Процессор (CPU)" if metric == "cpu" else "Оперативная память (RAM)"
+        )
+        text = (
+            f"⚠️ <b>[АНМАЛИЯ] Нетипичное поведение ресурса!</b>\n\n"
+            f"<b>Проект:</b> <code>{project.upper()}</code>\n"
+            f"<b>Ресурс:</b> <code>{resource}</code>\n"
+            f"<b>Показатель:</b> {metric_display}\n\n"
+            f"<b>Текущее значение:</b> 🔴 <code>{current_value}</code>\n"
+            f"<b>Ожидаемое (среднее):</b> <code>{mean}</code> (нормальное отклонение: <code>{std}</code>)\n\n"
+            f"<i>Рекомендуется проверить логи и статус контейнера.</i>"
+        )
+
+        # 3. Отправляем сообщение всем зарегистрированным администраторам
+        for admin_id in self.admin_ids:
+            try:
+                await self.bot.send_message(
+                    chat_id=admin_id, text=text, parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(f"Notifier: Failed to send anomaly alert to admin {admin_id}: {e}")

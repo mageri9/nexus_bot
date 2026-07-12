@@ -319,3 +319,44 @@ async def test_collector_detects_and_publishes_anomaly(temp_db_path, fake_redis,
     assert len(events) == 1
     assert events[0].severity == "WARNING"
     assert events[0].source == "intelligence"
+
+
+@pytest.mark.asyncio
+async def test_telegram_notifier_sends_anomaly_alert(fake_redis):
+    from unittest.mock import AsyncMock
+    from telegram.notifier import TelegramNotifier
+    import telegram.notifier
+
+    # Подменяем реальный клиент Redis в модуле на фейковый для изоляции теста
+    telegram.notifier.redis_client = fake_redis
+
+    # Настраиваем мок-объект бота Telegram
+    mock_bot = AsyncMock()
+    notifier = TelegramNotifier(bot=mock_bot)
+    notifier.admin_ids = [99999]
+
+    data = {
+        "project": "tarot_bot",
+        "resource": "app",
+        "metric": "cpu",
+        "current_value": "95.0%",
+        "mean": "10.50%",
+        "std": "0.53",
+    }
+
+    # Сценарий 1: Обычная отправка (режим тишины выключен)
+    await notifier.on_anomaly_detected("ml:anomaly_detected", data)
+    assert mock_bot.send_message.call_count == 1
+
+    args, kwargs = mock_bot.send_message.call_args
+    assert kwargs["chat_id"] == 99999
+    assert "TAROT_BOT" in kwargs["text"]
+    assert "95.0%" in kwargs["text"]
+    assert "Процессор" in kwargs["text"]
+
+    # Сценарий 2: Подавление уведомления (режим тишины включен)
+    mock_bot.send_message.reset_mock()
+    await fake_redis.set("nexus:silence:tarot_bot:app", "1")
+
+    await notifier.on_anomaly_detected("ml:anomaly_detected", data)
+    assert mock_bot.send_message.call_count == 0  # Сообщение не должно быть отправлено
