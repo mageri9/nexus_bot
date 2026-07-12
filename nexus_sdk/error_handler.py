@@ -117,3 +117,18 @@ class NexusSDK:
             await self.report_error(exception, context=update_ctx)
             # Пробрасываем ошибку дальше для штатной работы бота
             raise exception
+
+    def register_ptb_error_handler(self, app) -> None:
+        """Интегрирует глобальный перехватчик исключений в python-telegram-bot Application"""
+
+        async def ptb_error_handler(update: object, context) -> None:
+            exception = context.error
+            # Захват контекста обновления в строковом виде
+            update_ctx = (
+                str(update.to_dict()) if hasattr(update, "to_dict") else str(update)
+            )
+            await self.report_error(exception, context=update_ctx)
+            # Пробрасываем исключение дальше для штатной работы фреймворка
+            raise exception
+
+        app.add_error_handler(ptb_error_handler)
