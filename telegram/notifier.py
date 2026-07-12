@@ -269,7 +269,7 @@ class TelegramNotifier:
             "Процессор (CPU)" if metric == "cpu" else "Оперативная память (RAM)"
         )
         text = (
-            f"⚠️ <b>[АНМАЛИЯ] Нетипичное поведение ресурса!</b>\n\n"
+            f"⚠️ <b>[АНОМАЛИЯ] Нетипичное поведение ресурса!</b>\n\n"
             f"<b>Проект:</b> <code>{project.upper()}</code>\n"
             f"<b>Ресурс:</b> <code>{resource}</code>\n"
             f"<b>Показатель:</b> {metric_display}\n\n"
