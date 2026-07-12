@@ -52,6 +52,13 @@ class SqliteEventStorage(EventStorage):
 
     def _init_db(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
+            # WAL вместо дефолтного journal_mode=DELETE: nexus-core (collector +
+            # predictor) и scripts/train.py — разные процессы, оба пишут/читают
+            # один и тот же файл. Без WAL писатель блокирует читателей сильнее,
+            # чем нужно, и train.py, запущенный во время работы бота, легко
+            # ловит "database is locked".
+            conn.execute("PRAGMA journal_mode=WAL;")
+
             # Таблица логов событий
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS event_log (
