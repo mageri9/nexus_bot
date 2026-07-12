@@ -273,3 +273,90 @@ async def test_custom_other_category_resource_transitions_are_never_tracked_KNOW
         "Если это упало - значит баг с потерей old_status для ресурсов из "
         "категории 'other' починили. Обнови README и удали/инвертируй этот тест."
     )
+
+async def test_debounce_transition_requires_m_ticks(
+    registry, fake_redis, event_bus, scripted_transport, recording_subscriber
+):
+    subscribe_all(event_bus, recording_subscriber)
+    container = make_docker_container(
+        scripted_transport, "running", container_name="app-1"
+    )
+    registry.register(ProjectAgent(name="nexus", resources={"app": container}))
+
+    # Создаем коллектор с debounce_ticks = 3
+    collector = StateCollector(
+        registry=registry,
+        redis_client=fake_redis,
+        event_bus=event_bus,
+        interval=5,
+        debounce_ticks=3,
+    )
+
+    # Тик 1: инициализация начального состояния (коммитится сразу при первом обнаружении)
+    await run_one_collector_tick(collector)
+    assert recording_subscriber.types() == ["ResourceStarted"]
+    recording_subscriber.received.clear()
+
+    # Меняем статус контейнера на "exited"
+    set_status(scripted_transport, "app-1", "exited")
+
+    # Тик 2 (1-й тик изменения): статус не сохраняется в Redis, событие отсутствует
+    await run_one_collector_tick(collector)
+    assert recording_subscriber.types() == []
+    raw = await fake_redis.get("nexus:state:nexus")
+    state = json.loads(raw)
+    assert state["containers"]["app"]["status"] == "running"
+
+    # Тик 3 (2-й тик изменения): статус по-прежнему "running" в Redis, события нет
+    await run_one_collector_tick(collector)
+    assert recording_subscriber.types() == []
+    raw = await fake_redis.get("nexus:state:nexus")
+    state = json.loads(raw)
+    assert state["containers"]["app"]["status"] == "running"
+
+    # Тик 4 (3-й тик изменения — порог достигнут): переход фиксируется, статус "exited", летит событие
+    await run_one_collector_tick(collector)
+    assert recording_subscriber.types() == ["ResourceStopped"]
+    raw = await fake_redis.get("nexus:state:nexus")
+    state = json.loads(raw)
+    assert state["containers"]["app"]["status"] == "exited"
+
+
+async def test_debounce_resets_if_status_reverts_before_threshold(
+    registry, fake_redis, event_bus, scripted_transport, recording_subscriber
+):
+    subscribe_all(event_bus, recording_subscriber)
+    container = make_docker_container(
+        scripted_transport, "running", container_name="app-1"
+    )
+    registry.register(ProjectAgent(name="nexus", resources={"app": container}))
+
+    collector = StateCollector(
+        registry=registry,
+        redis_client=fake_redis,
+        event_bus=event_bus,
+        interval=5,
+        debounce_ticks=3,
+    )
+
+    # Тик 1: инициализируем
+    await run_one_collector_tick(collector)
+    recording_subscriber.received.clear()
+
+    # Кратковременный сбой на 1 тик
+    set_status(scripted_transport, "app-1", "exited")
+    await run_one_collector_tick(collector)  # 1-й тик сбоя
+    assert recording_subscriber.types() == []
+
+    # Возвращаемся в исходное состояние "running" до достижения порога 3 тиков
+    set_status(scripted_transport, "app-1", "running")
+    await run_one_collector_tick(collector)  # сброс накопленного дребезга
+    assert recording_subscriber.types() == []
+
+    # Повторная проверка стабильности
+    await run_one_collector_tick(collector)
+    assert recording_subscriber.types() == []
+
+    raw = await fake_redis.get("nexus:state:nexus")
+    state = json.loads(raw)
+    assert state["containers"]["app"]["status"] == "running"

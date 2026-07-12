@@ -15,12 +15,17 @@ class StateCollector:
         redis_client: Redis,
         event_bus: EventBus,
         interval: int = 5,
+        debounce_ticks: int = 1,
     ):
         self.registry = registry
         self.redis = redis_client
         self.event_bus = event_bus
         self.interval = interval
+        self.debounce_ticks = debounce_ticks
         self._task: asyncio.Task | None = None
+        # Хранилище для дребезга переходов состояний:
+        # {agent_name: {resource_name: (target_status, count)}}
+        self._pending_transitions: dict[str, dict[str, tuple[str, int]]] = {}
 
     def start(self) -> None:
         """Запускает фоновый цикл сбора данных"""
@@ -36,6 +41,18 @@ class StateCollector:
                 await self._task
             except asyncio.CancelledError:
                 pass
+
+    def _get_pending(self, agent_name: str, resource_name: str) -> tuple[str, int] | None:
+        return self._pending_transitions.get(agent_name, {}).get(resource_name)
+
+    def _set_pending(self, agent_name: str, resource_name: str, target_status: str, count: int) -> None:
+        if agent_name not in self._pending_transitions:
+            self._pending_transitions[agent_name] = {}
+        self._pending_transitions[agent_name][resource_name] = (target_status, count)
+
+    def _clear_pending(self, agent_name: str, resource_name: str) -> None:
+        if agent_name in self._pending_transitions:
+            self._pending_transitions[agent_name].pop(resource_name, None)
 
     async def _loop(self) -> None:
         while True:
@@ -74,14 +91,49 @@ class StateCollector:
 
                     # Собираем свежие данные со всех ресурсов проекта
                     for res_name, resource in agent.resources.items():
-                        status = await resource.get_status()
+                        probed_status = await resource.get_status()
                         try:
                             metrics = await resource.get_metrics()
                         except Exception as e:
                             metrics = {"error": str(e)}
 
+                        committed_status = old_resources_statuses.get(res_name)
+
+                        # Применение дебаунса переходов состояний
+                        if committed_status is None:
+                            # Первое появление ресурса — сохраняем статус без задержки
+                            status_to_save = probed_status
+                            self._clear_pending(agent_name, res_name)
+                        elif probed_status == committed_status:
+                            # Текущий статус совпадает с закоммиченным — сбрасываем дребезг
+                            status_to_save = committed_status
+                            self._clear_pending(agent_name, res_name)
+                        else:
+                            # Наблюдаем изменение статуса — крутим счётчик
+                            pending = self._get_pending(agent_name, res_name)
+                            if pending:
+                                target_status, count = pending
+                            else:
+                                target_status, count = probed_status, 0
+
+                            if probed_status == target_status:
+                                count += 1
+                            else:
+                                # Если статус изменился на другой в процессе ожидания, перезапускаем счёт
+                                target_status = probed_status
+                                count = 1
+
+                            if count >= self.debounce_ticks:
+                                # Статус стабильно держится нужный интервал — фиксируем переход
+                                status_to_save = probed_status
+                                self._clear_pending(agent_name, res_name)
+                            else:
+                                # Порог ещё не пройден — сохраняем счётчик, в стейте оставляем старый статус
+                                self._set_pending(agent_name, res_name, target_status, count)
+                                status_to_save = committed_status
+
                         resource_payload = {
-                            "status": status,
+                            "status": status_to_save,
                             "metrics": metrics,
                             "capabilities": getattr(resource, "capabilities", [])
                         }
@@ -98,7 +150,8 @@ class StateCollector:
                             state_v2["other"][res_name] = resource_payload
 
                         # 2. Анализ переходов состояний
-                        old_status = old_resources_statuses.get(res_name)
+                        old_status = committed_status
+                        status = status_to_save
 
                         payload = {
                             "agent": agent_name,
@@ -164,6 +217,7 @@ class StateCollector:
                             logger.warning(
                                 f"Collector: Resource {agent_name}:{old_res_name} was removed from manifest."
                             )
+                            self._clear_pending(agent_name, old_res_name)
                             await self.event_bus.publish(
                                 "ResourceDeleted", deleted_payload
                             )

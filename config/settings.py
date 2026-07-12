@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     ADMIN_IDS: str = "0"
 
+    # Конфигурация StateCollector
+    COLLECTOR_DEBOUNCE_TICKS: int = 1
+
     # Конфигурация шлюза AITUNNEL
     AITUNNEL_API_KEY: Optional[SecretStr] = None
     AITUNNEL_BASE_URL: str = "https://api.aitunnel.ru/v1/"
