@@ -5,7 +5,7 @@ from agents import registry
 from .query import QueryService
 from .event_bus import EventBus
 from .command import CommandService
-from .collector import StateCollector
+from .collector import StateCollector, LogCollector
 from .ai import AIService
 from .incident import IncidentService
 from .pubsub_listener import PubSubListener
@@ -23,6 +23,8 @@ state_collector = StateCollector(
     event_bus=event_bus,
     debounce_ticks=settings.COLLECTOR_DEBOUNCE_TICKS
 )
+# Инициализация сборщика логов
+log_collector = LogCollector(registry=registry, redis_client=redis_client)
 
 incident_service = IncidentService(
     redis_client=redis_client,

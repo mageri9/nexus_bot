@@ -55,6 +55,18 @@ class QueryService:
     async def get_resource_logs(
         self, agent_name: str, resource_name: str, limit: int = 50
     ) -> str:
+        # 1. Попытка прочесть данные из кольцевого буфера в Redis
+        key = f"nexus:logs:{agent_name}:{resource_name}"
+        try:
+            buffered_lines = await self.redis.lrange(key, -limit, -1)
+            if buffered_lines:
+                return "\n".join(buffered_lines)
+        except Exception as e:
+            # Логируем ошибку, но не падаем — пробуем фолбек
+            from loguru import logger
+            logger.warning(f"QueryService: Failed to fetch logs from Redis buffer for {agent_name}:{resource_name}: {e}")
+
+        # 2. Фолбек на прямое чтение через Docker API транспорт, если буфер пуст
         agent = self.registry.get(agent_name)
         resource = agent.resources.get(resource_name)
         if not resource:

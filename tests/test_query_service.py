@@ -8,10 +8,14 @@ from services.health_engine import HealthEngine
 
 @pytest.fixture
 def query_service(registry, fake_redis):
-    return QueryService(registry=registry, redis_client=fake_redis, health_engine=HealthEngine())
+    return QueryService(
+        registry=registry, redis_client=fake_redis, health_engine=HealthEngine()
+    )
 
 
-async def test_get_system_status_no_cached_data_reports_placeholder(registry, query_service):
+async def test_get_system_status_no_cached_data_reports_placeholder(
+    registry, query_service
+):
     registry.register(ProjectAgent(name="nexus", resources={}))
 
     status = await query_service.get_system_status()
@@ -61,7 +65,9 @@ async def test_get_agent_details_returns_raw_cached_json(query_service, fake_red
     assert details == state_v2
 
 
-async def test_get_resource_logs_unknown_resource_raises_key_error(registry, query_service):
+async def test_get_resource_logs_unknown_resource_raises_key_error(
+    registry, query_service
+):
     registry.register(ProjectAgent(name="nexus", resources={}))
 
     with pytest.raises(KeyError):
@@ -95,5 +101,24 @@ async def test_get_resource_logs_delegates_to_resource(
 
 
 def test_calculate_health_score_delegates_to_health_engine(query_service):
-    score = query_service.calculate_health_score("nexus", {"version": 2, "containers": {}, "storage": {}})
+    score = query_service.calculate_health_score(
+        "nexus", {"version": 2, "containers": {}, "storage": {}}
+    )
     assert score == 100
+
+
+async def test_get_resource_logs_from_redis_buffer_first(
+    registry, query_service, fake_redis, scripted_transport
+):
+    # Предварительно наполняем буфер в Redis
+    await fake_redis.rpush("nexus:logs:nexus:app", "buffered log 1", "buffered log 2")
+
+    container = DockerContainer("app", scripted_transport, "nexus-core")
+    registry.register(ProjectAgent(name="nexus", resources={"app": container}))
+
+    # Запрашиваем логи через QueryService
+    logs = await query_service.get_resource_logs("nexus", "app")
+
+    # Должны получить данные из кэша без задействования транспорта
+    assert logs == "buffered log 1\nbuffered log 2"
+    assert len(scripted_transport.calls) == 0  # Скрипт транспорта не вызывался вовсе

@@ -229,3 +229,108 @@ class StateCollector:
                 logger.error(f"Collector loop error: {e}")
 
             await asyncio.sleep(self.interval)
+
+
+class LogCollector:
+    def __init__(self, registry: AgentRegistry, redis_client: Redis, limit: int = 100):
+        self.registry = registry
+        self.redis = redis_client
+        self.limit = limit
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._running = False
+
+    def start(self) -> None:
+        """Запускает фоновые задачи стриминга логов для всех контейнеров"""
+        self._running = True
+        agent_names = self.registry.list_agents()
+        logger.info(
+            f"LogCollector: Starting continuous streaming for agents: {agent_names}"
+        )
+
+        for agent_name in agent_names:
+            agent = self.registry.get(agent_name)
+            for res_name, resource in agent.resources.items():
+                if isinstance(resource, DockerContainer):
+                    task_key = f"{agent_name}:{res_name}"
+                    if task_key not in self._tasks:
+                        self._tasks[task_key] = asyncio.create_task(
+                            self._stream_container_logs(
+                                agent_name, res_name, resource.container_name
+                            )
+                        )
+
+    async def stop(self) -> None:
+        """Грациозно останавливает все стримы логов"""
+        self._running = False
+        logger.info("LogCollector: Stopping log streaming tasks...")
+        for task_key, task in list(self._tasks.items()):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._tasks.clear()
+
+    async def _stream_container_logs(
+        self, agent_name: str, res_name: str, container_name: str
+    ) -> None:
+        """Потоковое чтение логов контейнера и сохранение в кольцевой буфер Redis"""
+        while self._running:
+            try:
+                logger.debug(
+                    f"LogCollector: Spawning docker logs -f for {agent_name}:{res_name}..."
+                )
+
+                # Запускаем 'docker logs -f' и сливаем stderr в stdout для полной картины
+                cmd = [
+                    "docker",
+                    "logs",
+                    "-f",
+                    "--tail",
+                    str(self.limit),
+                    container_name,
+                ]
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+
+                # Построчно читаем поток
+                while self._running:
+                    line_bytes = await proc.stdout.readline()
+                    if not line_bytes:
+                        # Поток прервался (контейнер упал или перезапустился)
+                        break
+
+                    line = line_bytes.decode(errors="replace").rstrip("\r\n")
+                    key = f"nexus:logs:{agent_name}:{res_name}"
+
+                    # Пишем в Redis и обрезаем буфер до лимита
+                    async with self.redis.pipeline() as pipe:
+                        pipe.rpush(key, line)
+                        pipe.ltrim(key, -self.limit, -1)
+                        await pipe.execute()
+
+                return_code = await proc.wait()
+                logger.warning(
+                    f"LogCollector: Stream for {agent_name}:{res_name} exited (code {return_code}). "
+                    f"Reconnecting in 5 seconds..."
+                )
+                await asyncio.sleep(5)
+
+            except asyncio.CancelledError:
+                # Мягкое завершение при остановке сервиса
+                if "proc" in locals() and proc.returncode is None:
+                    try:
+                        proc.terminate()
+                        await proc.wait()
+                    except Exception:
+                        pass
+                raise
+            except Exception as e:
+                logger.error(
+                    f"LogCollector: Error streaming logs for {agent_name}:{res_name}: {e}. "
+                    f"Retrying in 5 seconds..."
+                )
+                await asyncio.sleep(5)

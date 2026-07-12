@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from core import ProjectAgent, Resource
 from infra.docker import DockerContainer
-from services.collector import StateCollector
+from services.collector import StateCollector, LogCollector
 
 
 class FakeResource(Resource):
@@ -360,3 +360,67 @@ async def test_debounce_resets_if_status_reverts_before_threshold(
     raw = await fake_redis.get("nexus:state:nexus")
     state = json.loads(raw)
     assert state["containers"]["app"]["status"] == "running"
+
+async def test_log_collector_pushes_to_redis(registry, fake_redis):
+    container = DockerContainer("app", None, "nexus-core")
+    registry.register(ProjectAgent(name="nexus", resources={"app": container}))
+
+    collector = LogCollector(registry, fake_redis, limit=5)
+
+    # Мокаем процесс чтения
+    mock_proc = AsyncMock()
+    mock_proc.stdout.readline = AsyncMock(
+        side_effect=[
+            b"line 1\n",
+            b"line 2\n",
+            b"",  # конец стрима логов
+        ]
+    )
+    mock_proc.wait = AsyncMock(return_value=0)
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        # Запускаем стрим в отдельном таске
+        task = asyncio.create_task(
+            collector._stream_container_logs("nexus", "app", "nexus-core")
+        )
+
+        # Даем отработать и мягко отменяем
+        await asyncio.sleep(0.01)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    # Проверяем наполнение буфера в Redis
+    logs_raw = await fake_redis.lrange("nexus:logs:nexus:app", 0, -1)
+    assert logs_raw == ["line 1", "line 2"]
+
+
+async def test_log_collector_respects_buffer_limit(registry, fake_redis):
+    container = DockerContainer("app", None, "nexus-core")
+    registry.register(ProjectAgent(name="nexus", resources={"app": container}))
+
+    # Буфер жестко ограничен 3 строками
+    collector = LogCollector(registry, fake_redis, limit=3)
+
+    mock_proc = AsyncMock()
+    mock_proc.stdout.readline = AsyncMock(
+        side_effect=[b"1\n", b"2\n", b"3\n", b"4\n", b"5\n", b""]
+    )
+    mock_proc.wait = AsyncMock(return_value=0)
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        task = asyncio.create_task(
+            collector._stream_container_logs("nexus", "app", "nexus-core")
+        )
+        await asyncio.sleep(0.01)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    # В Redis должны остаться только последние 3 строки
+    logs_raw = await fake_redis.lrange("nexus:logs:nexus:app", 0, -1)
+    assert logs_raw == ["3", "4", "5"]

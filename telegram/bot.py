@@ -6,6 +6,7 @@ from services import (
     event_bus,
     state_collector,
     pubsub_listener,
+    log_collector,
 )
 from .handlers import router
 from .notifier import TelegramNotifier
@@ -31,6 +32,7 @@ async def start_bot():
 
     # --- ЗАПУСК ФОНОВЫХ СЛУЖБ ---
     state_collector.start()
+    log_collector.start()
     pubsub_listener.start()  # Запускаем прослушивание Redis Pub/Sub
 
     logger.info("Clearing potential webhook conflicts and dropping pending updates...")
@@ -42,4 +44,5 @@ async def start_bot():
     finally:
         # Грациозно останавливаем фоновые процессы при завершении работы бота
         await state_collector.stop()
+        await log_collector.stop()
         await pubsub_listener.stop()
