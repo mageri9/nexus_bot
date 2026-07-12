@@ -70,7 +70,7 @@ services:
       - DOCKER_HOST=tcp://docker-proxy:2375
     networks:
       - nexus_internal
-      - default
+      - nexus_shared
 
   webhook:
     image: ${GHCR_IMAGE_NAME:-ghcr.io/mageri9/nexus}:latest
@@ -84,6 +84,9 @@ services:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379/0
+    networks:
+      - nexus_internal
+      - nexus_shared
 
   tunnel:
     # Забираем предсобранный в GitHub Actions готовый образ туннеля
