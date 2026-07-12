@@ -37,16 +37,23 @@ async def run_one_collector_tick(collector: StateCollector):
     поэтому CancelledError (BaseException) пробрасывается наружу как и
     задумано при штатной отмене задачи.
     """
-    with patch("services.collector.asyncio.sleep", new=AsyncMock(side_effect=asyncio.CancelledError)):
+    with patch(
+        "services.collector.asyncio.sleep",
+        new=AsyncMock(side_effect=asyncio.CancelledError),
+    ):
         with pytest.raises(asyncio.CancelledError):
             await collector._loop()
 
 
 def make_collector(registry, fake_redis, event_bus):
-    return StateCollector(registry=registry, redis_client=fake_redis, event_bus=event_bus, interval=5)
+    return StateCollector(
+        registry=registry, redis_client=fake_redis, event_bus=event_bus, interval=5
+    )
 
 
-def make_docker_container(scripted_transport, status: str, name="app", container_name="app-1"):
+def make_docker_container(
+    scripted_transport, status: str, name="app", container_name="app-1"
+):
     c = DockerContainer(name, scripted_transport, container_name)
     scripted_transport.on(
         ["docker", "inspect", "-f", "{{.State.Status}}", container_name], status
@@ -74,6 +81,7 @@ def subscribe_all(event_bus, subscriber):
 
 
 # ---- первое обнаружение ресурса ----
+
 
 async def test_first_seen_healthy_resource_emits_resource_started(
     registry, fake_redis, event_bus, scripted_transport, recording_subscriber
@@ -104,7 +112,9 @@ async def test_first_seen_unhealthy_resource_emits_resource_unhealthy(
 async def test_no_change_between_ticks_emits_nothing(
     registry, fake_redis, event_bus, scripted_transport, recording_subscriber
 ):
-    container = make_docker_container(scripted_transport, "running", container_name="app-1")
+    container = make_docker_container(
+        scripted_transport, "running", container_name="app-1"
+    )
     registry.register(ProjectAgent(name="nexus", resources={"app": container}))
     collector = make_collector(registry, fake_redis, event_bus)
 
@@ -118,21 +128,38 @@ async def test_no_change_between_ticks_emits_nothing(
 
 # ---- полная матрица переходов состояний ----
 
+
 @pytest.mark.parametrize(
     "old_status,new_status,expected_event",
     [
         ("running", "exited", "ResourceStopped"),
         ("running", "stopped", "ResourceStopped"),
-        ("healthy", "unknown", "ResourceUnhealthy"),  # was healthy, стал не-healthy, не stop-статус
+        (
+            "healthy",
+            "unknown",
+            "ResourceUnhealthy",
+        ),  # was healthy, стал не-healthy, не stop-статус
         ("unknown", "healthy", "ResourceRecovered"),
-        ("unknown", "exited", "ResourceStopped"),  # unhealthy -> stopped-подобный статус
+        (
+            "unknown",
+            "exited",
+            "ResourceStopped",
+        ),  # unhealthy -> stopped-подобный статус
     ],
 )
 async def test_transition_matrix_emits_expected_event(
-    registry, fake_redis, event_bus, scripted_transport, recording_subscriber,
-    old_status, new_status, expected_event,
+    registry,
+    fake_redis,
+    event_bus,
+    scripted_transport,
+    recording_subscriber,
+    old_status,
+    new_status,
+    expected_event,
 ):
-    container = make_docker_container(scripted_transport, old_status, container_name="app-1")
+    container = make_docker_container(
+        scripted_transport, old_status, container_name="app-1"
+    )
     registry.register(ProjectAgent(name="nexus", resources={"app": container}))
     collector = make_collector(registry, fake_redis, event_bus)
 
@@ -155,7 +182,9 @@ async def test_transition_between_two_unhealthy_non_stop_statuses_emits_nothing(
     ('exited','stopped','dead') - по текущей логике коллектора событие не
     генерируется вовсе (граничный случай матрицы переходов, задокументированное
     поведение, а не баг)."""
-    container = make_docker_container(scripted_transport, "unknown", container_name="app-1")
+    container = make_docker_container(
+        scripted_transport, "unknown", container_name="app-1"
+    )
     registry.register(ProjectAgent(name="nexus", resources={"app": container}))
     collector = make_collector(registry, fake_redis, event_bus)
     await run_one_collector_tick(collector)
@@ -171,7 +200,9 @@ async def test_resource_removed_from_manifest_emits_resource_deleted(
     registry, fake_redis, event_bus, scripted_transport, recording_subscriber
 ):
     event_bus.subscribe("ResourceDeleted", recording_subscriber)
-    container = make_docker_container(scripted_transport, "running", container_name="app-1")
+    container = make_docker_container(
+        scripted_transport, "running", container_name="app-1"
+    )
     agent = ProjectAgent(name="nexus", resources={"app": container})
     registry.register(agent)
     collector = make_collector(registry, fake_redis, event_bus)
@@ -224,6 +255,7 @@ async def test_resource_metrics_error_is_captured_without_crashing_tick(
 
 # ---- баг, обнаруженный в процессе написания тестов ----
 
+
 async def test_custom_other_category_resource_transitions_are_never_tracked_KNOWN_BUG(
     registry, fake_redis, event_bus, recording_subscriber
 ):
@@ -267,12 +299,15 @@ async def test_custom_other_category_resource_transitions_are_never_tracked_KNOW
 
     subscribe_all(event_bus, recording_subscriber)
     # Статус НЕ меняется между тиками
-    await run_one_collector_tick(collector)  # тик 2: ожидаемо - тишина, фактически - снова "первое обнаружение"
+    await run_one_collector_tick(
+        collector
+    )  # тик 2: ожидаемо - тишина, фактически - снова "первое обнаружение"
 
     assert recording_subscriber.types() == ["ResourceStarted"], (
         "Если это упало - значит баг с потерей old_status для ресурсов из "
         "категории 'other' починили. Обнови README и удали/инвертируй этот тест."
     )
+
 
 async def test_debounce_transition_requires_m_ticks(
     registry, fake_redis, event_bus, scripted_transport, recording_subscriber
@@ -361,11 +396,13 @@ async def test_debounce_resets_if_status_reverts_before_threshold(
     state = json.loads(raw)
     assert state["containers"]["app"]["status"] == "running"
 
+
 async def test_log_collector_pushes_to_redis(registry, fake_redis):
     container = DockerContainer("app", None, "nexus-core")
     registry.register(ProjectAgent(name="nexus", resources={"app": container}))
 
     collector = LogCollector(registry, fake_redis, limit=5)
+    collector._running = True  # <-- Явно взводим флаг для работы цикла в тесте
 
     # Мокаем процесс чтения
     mock_proc = AsyncMock()
@@ -403,6 +440,7 @@ async def test_log_collector_respects_buffer_limit(registry, fake_redis):
 
     # Буфер жестко ограничен 3 строками
     collector = LogCollector(registry, fake_redis, limit=3)
+    collector._running = True  # <-- Явно взводим флаг для работы цикла в тесте
 
     mock_proc = AsyncMock()
     mock_proc.stdout.readline = AsyncMock(
@@ -421,6 +459,6 @@ async def test_log_collector_respects_buffer_limit(registry, fake_redis):
         except asyncio.CancelledError:
             pass
 
-    # В Redis должны остаться только последние 3 строки
-    logs_raw = await fake_redis.lrange("nexus:logs:nexus:app", 0, -1)
-    assert logs_raw == ["3", "4", "5"]
+        # В Redis должны остаться только последние 3 строки
+        logs_raw = await fake_redis.lrange("nexus:logs:nexus:app", 0, -1)
+        assert logs_raw == ["3", "4", "5"]
