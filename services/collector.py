@@ -18,6 +18,7 @@ class StateCollector:
         interval: int = 5,
         debounce_ticks: int = 1,
         health_engine: HealthEngine = None,
+        event_storage=None,
     ):
         self.registry = registry
         self.redis = redis_client
@@ -26,6 +27,7 @@ class StateCollector:
         self.debounce_ticks = debounce_ticks
         self._task: asyncio.Task | None = None
         self.health_engine = health_engine or HealthEngine()
+        self.event_storage = event_storage
         self._pending_transitions: dict[str, dict[str, tuple[str, int]]] = {}
 
     def start(self) -> None:
@@ -286,7 +288,14 @@ class StateCollector:
 
                     await self.redis.set(key, json.dumps(state_v2))
 
-                    # 4. Расчет Health Score и запись во временной ряд в Redis
+                    # Сохранение снимков метрик
+                    if self.event_storage:
+                        try:
+                            await self._save_snapshots_for_agent(state_v2)
+                        except Exception as e:
+                            logger.error(f"Collector: Failed to save metric snapshots: {e}")
+
+                    # Расчет Health Score и запись во временной ряд в Redis
                     score = self.health_engine.calculate_score(state_v2)
                     if score != -1:  # Игнорируем маркер инициализации / отсутствия данных
                         now = datetime.now(timezone.utc)
@@ -307,6 +316,65 @@ class StateCollector:
                 logger.error(f"Collector loop error: {e}")
 
             await asyncio.sleep(self.interval)
+
+    async def _save_snapshots_for_agent(self, state_v2: dict) -> None:
+        from intelligence.models import MetricSnapshot
+
+        agent_name = state_v2.get("agent_name", "unknown")
+        ts_str = state_v2.get("timestamp")
+        try:
+            ts = (
+                datetime.fromisoformat(ts_str) if ts_str else datetime.now(timezone.utc)
+            )
+        except Exception:
+            ts = datetime.now(timezone.utc)
+
+        # 1. Снимаем метрики с контейнеров
+        for res_name, res_data in state_v2.get("containers", {}).items():
+            metrics = res_data.get("metrics", {})
+            status = res_data.get("status", "unknown")
+
+            cpu, mem_perc, restarts = None, None, None
+            if isinstance(metrics, dict):
+                cpu_data = metrics.get("cpu")
+                if isinstance(cpu_data, dict):
+                    cpu = cpu_data.get("value")
+
+                mem_data = metrics.get("mem_perc")
+                if isinstance(mem_data, dict):
+                    mem_perc = mem_data.get("value")
+
+                restart_data = metrics.get("restarts")
+                if isinstance(restart_data, dict):
+                    try:
+                        restarts = int(restart_data.get("value", 0))
+                    except (ValueError, TypeError):
+                        pass
+
+            snapshot = MetricSnapshot(
+                timestamp=ts,
+                agent=agent_name,
+                resource=res_name,
+                status=status,
+                cpu=cpu,
+                mem_perc=mem_perc,
+                restarts=restarts,
+            )
+            await self.event_storage.save_metric_snapshot(snapshot)
+
+        # 2. Снимаем метрики с дисков/хранилищ
+        for res_name, res_data in state_v2.get("storage", {}).items():
+            status = res_data.get("status", "unknown")
+            snapshot = MetricSnapshot(
+                timestamp=ts,
+                agent=agent_name,
+                resource=res_name,
+                status=status,
+                cpu=None,
+                mem_perc=None,
+                restarts=None
+            )
+            await self.event_storage.save_metric_snapshot(snapshot)
 
 
 class LogCollector:

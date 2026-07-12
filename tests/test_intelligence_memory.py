@@ -142,3 +142,76 @@ async def test_collector_survives_storage_exceptions(temp_db_path, fake_redis):
         },
     )
     # Тест пройден, если исключение успешно погашено внутри `on_event`
+
+
+@pytest.mark.asyncio
+async def test_collector_saves_metric_snapshots(
+    temp_db_path, fake_redis, event_bus, scripted_transport, registry
+):
+    import asyncio
+    from core import ProjectAgent
+    from services.collector import StateCollector
+    from infra.docker import DockerContainer
+
+    # 1. Настраиваем окружение
+    container = DockerContainer("app", scripted_transport, "nexus-core")
+    scripted_transport.on(
+        ["docker", "inspect", "-f", "{{.State.Status}}", "nexus-core"], "running"
+    )
+    scripted_transport.on(
+        [
+            "docker",
+            "stats",
+            "nexus-core",
+            "--no-stream",
+            "--format",
+            "{{.CPUPerc}}|{{.MemPerc}}|{{.MemUsage}}",
+        ],
+        "15.5%|45.2%|200MiB / 1024MiB",
+    )
+    scripted_transport.on(
+        [
+            "docker",
+            "inspect",
+            "-f",
+            "{{.RestartCount}}|{{.State.StartedAt}}",
+            "nexus-core",
+        ],
+        "2|2026-07-12T00:00:00.000000000Z",
+    )
+
+    registry.register(ProjectAgent(name="nexus", resources={"app": container}))
+
+    storage = SqliteEventStorage(db_path=temp_db_path)
+
+    # 2. Инициализируем StateCollector
+    collector = StateCollector(
+        registry=registry,
+        redis_client=fake_redis,
+        event_bus=event_bus,
+        interval=5,
+        debounce_ticks=1,
+        event_storage=storage,
+    )
+
+    # 3. Выполняем ровно один тик коллектора
+    from unittest.mock import AsyncMock, patch
+
+    with patch(
+        "services.collector.asyncio.sleep",
+        new=AsyncMock(side_effect=asyncio.CancelledError),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await collector._loop()
+
+    # 4. Проверяем, что в базе появился снимок
+    snapshots = await storage.query_metric_snapshots(agent="nexus", resource="app")
+    assert len(snapshots) == 1
+    snap = snapshots[0]
+
+    assert snap.agent == "nexus"
+    assert snap.resource == "app"
+    assert snap.status == "running"
+    assert snap.cpu == "15.5%"
+    assert snap.mem_perc == "45.2%"
+    assert snap.restarts == 2

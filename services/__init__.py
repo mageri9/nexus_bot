@@ -81,6 +81,9 @@ from intelligence.storage import SqliteEventStorage
 from intelligence.collector import IntelligenceCollector
 
 event_storage = SqliteEventStorage()
+# Связываем сборщик состояний с базой данных
+state_collector.event_storage = event_storage
+
 intelligence_collector = IntelligenceCollector(
     event_bus=event_bus,
     storage=event_storage,
