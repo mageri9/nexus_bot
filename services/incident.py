@@ -29,6 +29,11 @@ class IncidentService:
         self.query_service = query_service
         self.event_bus = event_bus
 
+    async def is_maintenance(self, project: str) -> bool:
+        """Проверяет, включен ли режим обслуживания для проекта."""
+        maintenance_key = f"nexus:maintenance:{project}"
+        return await self.redis.exists(maintenance_key) > 0
+
     async def add_to_timeline(self, text: str, severity: str = "INFO") -> None:
         """Добавляет событие в хронологическую ленту хоста (Datadog-lite)"""
         try:
@@ -75,6 +80,13 @@ class IncidentService:
         project = data["agent"]
         resource = data["resource"]
         new_status = data["new_status"]
+
+        # Если проект находится на обслуживании, игнорируем инцидент
+        if await self.is_maintenance(project):
+            logger.info(
+                f"IncidentService: Failure event for {project}:{resource} ignored due to maintenance mode."
+            )
+            return
 
         active_key = f"nexus:incident:active:{project}:{resource}"
 
@@ -152,6 +164,13 @@ class IncidentService:
         """Обработчик события восстановления ресурса (ResourceRecovered)"""
         project = data["agent"]
         resource = data["resource"]
+
+        # Если проект на обслуживании, игнорируем восстановление
+        if await self.is_maintenance(project):
+            logger.info(
+                f"IncidentService: Recovery event for {project}:{resource} ignored due to maintenance mode."
+            )
+            return
 
         active_key = f"nexus:incident:active:{project}:{resource}"
         incident_id = await self.redis.get(active_key)

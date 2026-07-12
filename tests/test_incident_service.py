@@ -1,34 +1,47 @@
 import asyncio
-import json
 import pytest
-from core import AgentRegistry, ProjectAgent
+from core import ProjectAgent
 from infra.docker import DockerContainer
-from services.incident import IncidentService, Incident
+from services.incident import IncidentService
 from services.query import QueryService
 from services.health_engine import HealthEngine
 
 
 @pytest.fixture
 def query_service(registry, fake_redis):
-    return QueryService(registry=registry, redis_client=fake_redis, health_engine=HealthEngine())
+    return QueryService(
+        registry=registry, redis_client=fake_redis, health_engine=HealthEngine()
+    )
 
 
 @pytest.fixture
 def incident_service(fake_redis, query_service, event_bus):
-    return IncidentService(redis_client=fake_redis, query_service=query_service, event_bus=event_bus)
+    return IncidentService(
+        redis_client=fake_redis, query_service=query_service, event_bus=event_bus
+    )
 
 
 def failed_payload(agent="nexus", resource="app", new_status="exited"):
-    return {"agent": agent, "resource": resource, "old_status": "running", "new_status": new_status}
+    return {
+        "agent": agent,
+        "resource": resource,
+        "old_status": "running",
+        "new_status": new_status,
+    }
 
 
 # ---- открытие инцидента ----
 
+
 async def test_on_resource_failed_creates_incident_with_incrementing_id(
     incident_service, fake_redis
 ):
-    await incident_service.on_resource_failed("ResourceStopped", failed_payload(resource="a"))
-    await incident_service.on_resource_failed("ResourceStopped", failed_payload(resource="b"))
+    await incident_service.on_resource_failed(
+        "ResourceStopped", failed_payload(resource="a")
+    )
+    await incident_service.on_resource_failed(
+        "ResourceStopped", failed_payload(resource="b")
+    )
 
     ids = await fake_redis.lrange("nexus:incidents:history", 0, -1)
     assert ids == ["2", "1"]  # lpush -> самый свежий первым
@@ -77,7 +90,9 @@ async def test_duplicate_failure_event_does_not_create_second_incident(
     assert ids == ["1"]
 
 
-async def test_concurrent_failure_events_create_only_one_incident(incident_service, fake_redis):
+async def test_concurrent_failure_events_create_only_one_incident(
+    incident_service, fake_redis
+):
     """То же самое, но при гонке нескольких почти одновременных событий."""
     await asyncio.gather(
         *[
@@ -132,8 +147,9 @@ async def test_incident_writes_timeline_entry(incident_service):
 
 # ---- восстановление ----
 
+
 async def test_on_resource_recovered_closes_incident_and_computes_duration(
-    incident_service
+    incident_service,
 ):
     await incident_service.on_resource_failed("ResourceStopped", failed_payload())
 
@@ -174,7 +190,9 @@ async def test_on_resource_recovered_with_no_active_incident_is_a_noop(
     assert recording_subscriber.received == []
 
 
-async def test_after_recovery_a_new_failure_opens_a_fresh_incident(incident_service, fake_redis):
+async def test_after_recovery_a_new_failure_opens_a_fresh_incident(
+    incident_service, fake_redis
+):
     """После штатного восстановления лок снимается явным DELETE, и следующий
     сбой того же ресурса должен завести новый (второй) инцидент."""
     await incident_service.on_resource_failed("ResourceStopped", failed_payload())
@@ -188,6 +206,7 @@ async def test_after_recovery_a_new_failure_opens_a_fresh_incident(incident_serv
 
 
 # ---- известная проблема, найденная при ревью кода ----
+
 
 async def test_active_incident_lock_has_no_ttl_KNOWN_BUG(incident_service, fake_redis):
     """
@@ -243,9 +262,14 @@ async def test_resource_deleted_event_does_not_release_incident_lock_KNOWN_BUG(
 
 # ---- вспомогательные методы ----
 
+
 async def test_list_recent_incidents_returns_most_recent_first(incident_service):
-    await incident_service.on_resource_failed("ResourceStopped", failed_payload(resource="a"))
-    await incident_service.on_resource_failed("ResourceStopped", failed_payload(resource="b"))
+    await incident_service.on_resource_failed(
+        "ResourceStopped", failed_payload(resource="a")
+    )
+    await incident_service.on_resource_failed(
+        "ResourceStopped", failed_payload(resource="b")
+    )
 
     recent = await incident_service.list_recent_incidents(limit=10)
 
@@ -261,3 +285,35 @@ async def test_get_timeline_respects_limit_and_recency_order(incident_service):
     assert len(timeline) == 2
     assert timeline[0]["text"] == "event-4"
     assert timeline[1]["text"] == "event-3"
+
+
+async def test_on_resource_failed_ignored_under_maintenance(
+    incident_service, fake_redis
+):
+    # Включаем режим обслуживания для агента "nexus"
+    await fake_redis.set("nexus:maintenance:nexus", "1")
+
+    await incident_service.on_resource_failed("ResourceStopped", failed_payload())
+
+    # Инцидент не заносится в историю
+    ids = await fake_redis.lrange("nexus:incidents:history", 0, -1)
+    assert ids == []
+
+
+async def test_on_resource_recovered_ignored_under_maintenance(
+    incident_service, fake_redis
+):
+    # Сначала фиксируем инцидент без режима обслуживания
+    await incident_service.on_resource_failed("ResourceStopped", failed_payload())
+
+    # Включаем режим обслуживания
+    await fake_redis.set("nexus:maintenance:nexus", "1")
+
+    # Посылаем сигнал о восстановлении ресурса
+    await incident_service.on_resource_recovered(
+        "ResourceRecovered", {"agent": "nexus", "resource": "app"}
+    )
+
+    # Инцидент должен остаться в статусе "open" (событие восстановления проигнорировано)
+    incident = await incident_service.get_incident("1")
+    assert incident.status == "open"
