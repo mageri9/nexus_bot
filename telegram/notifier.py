@@ -18,7 +18,6 @@ class IncidentActionCallback(CallbackData, prefix="inc_act"):
 class TelegramNotifier:
     def __init__(self, bot: Bot):
         self.bot = bot
-        # Сохраняем весь список администраторов для вещания алертов
         self.admin_ids = settings.admin_id_list if settings.admin_id_list else []
 
     async def on_action_success(self, event_type: str, data: dict) -> None:
@@ -141,29 +140,19 @@ class TelegramNotifier:
         )
         builder.adjust(2, 2)
 
-        # Рассылаем карточки всем админам и собираем ID отправленных сообщений для ИИ-реплаев
-        sent_messages = []
+        # Рассылаем карточки всем админам (без автоматического запуска фонового ИИ-анализа)
         for admin_id in self.admin_ids:
             try:
-                sent_msg = await self.bot.send_message(
+                await self.bot.send_message(
                     chat_id=admin_id,
                     text=text,
                     parse_mode="HTML",
                     reply_markup=builder.as_markup(),
                 )
-                sent_messages.append((admin_id, sent_msg.message_id))
             except Exception as e:
                 logger.error(
                     f"Notifier: Failed to send incident alert to admin {admin_id}: {e}"
                 )
-
-        # Порождаем ровно ОДНУ фоновую задачу анализа, которая ответит реплаем всем получателям
-        if sent_messages:
-            asyncio.create_task(
-                self._run_auto_ai_diagnose_broadcast(
-                    sent_messages=sent_messages, incident_data=data
-                )
-            )
 
     async def on_incident_resolved(self, event_type: str, data: dict) -> None:
         """Форматирует и отправляет сообщение о разрешении инцидента всем админам"""
@@ -203,74 +192,6 @@ class TelegramNotifier:
                 logger.error(
                     f"Notifier: Failed to send incident resolution alert to admin {admin_id}: {e}"
                 )
-
-    async def _run_auto_ai_diagnose_broadcast(
-        self, sent_messages: list, incident_data: dict
-    ) -> None:
-        """
-        Неблокирующий широковещательный ИИ-анализ логов аварии.
-        Делегирует сборку контекста и вызов ИИ консолидированной службе AIService.
-        """
-        inc_id = incident_data["id"]
-        project = incident_data["project"]
-        resource = incident_data["resource"]
-
-        logger.info(
-            f"Auto-AI: Starting post-incident broadcast diagnostics for Incident #{inc_id}..."
-        )
-
-        try:
-            # Вызов единого метода вместо дублирования сборки промпта
-            report = await ai_service.diagnose_incident(inc_id)
-
-            # Сохраняем полученный отчет в инцидент в Redis (кэшируем результат)
-            try:
-                incident = await incident_service.get_incident(inc_id)
-                if incident:
-                    incident.ai_report = report
-                    await redis_client.set(
-                        f"nexus:incident:detail:{inc_id}", incident.model_dump_json()
-                    )
-            except Exception as cache_err:
-                logger.error(
-                    f"Auto-AI: Failed to cache diagnostics in Redis for #{inc_id}: {cache_err}"
-                )
-
-            ai_text = (
-                f"🧠 <b>Автоматический ИИ-анализ инцидента #{inc_id}</b> ({project}:{resource}):\n\n"
-                f"{html.escape(report)}"
-            )
-
-            # Рассылаем реплаи всем получателям карточки
-            for chat_id, message_id in sent_messages:
-                try:
-                    await self.bot.send_message(
-                        chat_id=chat_id,
-                        text=ai_text,
-                        parse_mode="HTML",
-                        reply_to_message_id=message_id,
-                    )
-                except Exception as e:
-                    logger.error(f"Auto-AI: Failed to reply to admin {chat_id}: {e}")
-
-            logger.info(
-                f"Auto-AI: Post-incident analysis successfully broadcasted for #{inc_id}"
-            )
-
-        except Exception as e:
-            logger.error(
-                f"Auto-AI: Broadcast diagnostics failed for incident #{inc_id}: {e}"
-            )
-            for chat_id, message_id in sent_messages:
-                try:
-                    await self.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"⚠️ <i>Не удалось сформировать автоматический ИИ-анализ для инцидента #{inc_id}: сервис недоступен или превышена квота запросов.</i>",
-                        parse_mode="HTML",
-                        reply_to_message_id=message_id,
-                    )
-                except Exception:
-                    pass
 
     async def on_devops_workflow_success(self, event_type: str, data: dict) -> None:
         """Оповещает всех админов об успешном деплое / прохождении пайплайна"""
