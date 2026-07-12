@@ -27,6 +27,7 @@ def webhook_module(monkeypatch):
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
 
     import webhook_service as ws
+
     importlib.reload(ws)
 
     ws.redis_client = fakeredis.FakeAsyncRedis(decode_responses=True)
@@ -56,6 +57,7 @@ def workflow_run_payload(status="completed", conclusion="success"):
 
 # ---- verify_signature() unit tests ----
 
+
 def test_verify_signature_accepts_valid_signature(webhook_module):
     body = b'{"a": 1}'
     header = sign(SECRET, body)
@@ -79,7 +81,9 @@ def test_verify_signature_rejects_missing_header(webhook_module):
 
 def test_verify_signature_rejects_header_without_sha256_prefix(webhook_module):
     body = b"{}"
-    bad_header = hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest()  # без "sha256=" префикса
+    bad_header = hmac.new(
+        SECRET.encode(), body, hashlib.sha256
+    ).hexdigest()  # без "sha256=" префикса
     assert webhook_module.verify_signature(body, bad_header) is False
 
 
@@ -88,6 +92,7 @@ def test_verify_signature_fails_closed_when_secret_not_configured(monkeypatch):
     должен отклоняться, а не приниматься по умолчанию."""
     monkeypatch.delenv("GITHUB_WEBHOOK_SECRET", raising=False)
     import webhook_service as ws
+
     importlib.reload(ws)
 
     body = b'{"a": 1}'
@@ -97,6 +102,7 @@ def test_verify_signature_fails_closed_when_secret_not_configured(monkeypatch):
 
 
 # ---- HTTP endpoint tests ----
+
 
 def test_endpoint_rejects_missing_signature(client):
     body = json.dumps(workflow_run_payload()).encode()
@@ -173,7 +179,9 @@ def test_endpoint_dispatches_failed_workflow_run(client):
 
 
 def test_endpoint_ignores_incomplete_workflow_run(client):
-    body = json.dumps(workflow_run_payload(status="in_progress", conclusion=None)).encode()
+    body = json.dumps(
+        workflow_run_payload(status="in_progress", conclusion=None)
+    ).encode()
     resp = client.post(
         "/webhooks/github",
         content=body,
@@ -198,3 +206,72 @@ def test_endpoint_ignores_unrelated_event_types(client):
     )
     assert resp.status_code == 200
     assert resp.json() == {"status": "ignored"}
+
+
+APP_SECRET = "test-app-secret-value"
+
+
+@pytest.fixture
+def webhook_module(monkeypatch):
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", SECRET)
+    monkeypatch.setenv("NEXUS_APP_SECRET", APP_SECRET)  # Настраиваем секрет SDK в тесте
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+
+    import webhook_service as ws
+
+    importlib.reload(ws)
+
+    ws.redis_client = fakeredis.FakeAsyncRedis(decode_responses=True)
+    return ws
+
+
+# --- Тестирование эндпоинта /events/app ---
+
+
+def test_app_endpoint_rejects_missing_signature(client):
+    body = json.dumps({"project": "tarot_bot", "exception_type": "ValueError"}).encode()
+    resp = client.post("/events/app", content=body)
+    assert resp.status_code == 401
+
+
+def test_app_endpoint_rejects_invalid_signature(client):
+    body = json.dumps({"project": "tarot_bot", "exception_type": "ValueError"}).encode()
+    resp = client.post(
+        "/events/app",
+        content=body,
+        headers={"X-Nexus-Signature-256": "sha256=" + "0" * 64},
+    )
+    assert resp.status_code == 401
+
+
+def test_app_endpoint_rejects_missing_required_fields(client):
+    # Не хватает message и traceback
+    payload = {"project": "tarot_bot", "exception_type": "ValueError"}
+    body = json.dumps(payload).encode()
+
+    digest = hmac.new(APP_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    resp = client.post(
+        "/events/app",
+        content=body,
+        headers={"X-Nexus-Signature-256": f"sha256={digest}"},
+    )
+    assert resp.status_code == 400
+
+
+def test_app_endpoint_dispatches_valid_error_payload(client, webhook_module):
+    payload = {
+        "project": "tarot_bot",
+        "exception_type": "ValueError",
+        "message": "Out of bounds",
+        "traceback": "mocked traceback text",
+    }
+    body = json.dumps(payload).encode()
+
+    digest = hmac.new(APP_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    resp = client.post(
+        "/events/app",
+        content=body,
+        headers={"X-Nexus-Signature-256": f"sha256={digest}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "dispatched", "event": "app:error"}

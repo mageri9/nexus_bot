@@ -11,19 +11,34 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
 
 WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "")
+# Секретный ключ для приложений, подключенных по SDK
+NEXUS_APP_SECRET = os.getenv("NEXUS_APP_SECRET", "")
 
 
 def verify_signature(payload_body: bytes, signature_header: str | None) -> bool:
     """Проверяет HMAC-SHA256 подпись тела запроса от GitHub."""
     if not WEBHOOK_SECRET:
-        # Секрет не сконфигурирован — по умолчанию отклоняем все запросы,
-        # а не пропускаем их молча.
         return False
     if not signature_header or not signature_header.startswith("sha256="):
         return False
 
     expected = hmac.new(
         WEBHOOK_SECRET.encode(), payload_body, hashlib.sha256
+    ).hexdigest()
+    received = signature_header.removeprefix("sha256=")
+
+    return hmac.compare_digest(expected, received)
+
+
+def verify_app_signature(payload_body: bytes, signature_header: str | None) -> bool:
+    """Проверяет HMAC-SHA256 подпись тела запроса от приложений."""
+    if not NEXUS_APP_SECRET:
+        return False
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+
+    expected = hmac.new(
+        NEXUS_APP_SECRET.encode(), payload_body, hashlib.sha256
     ).hexdigest()
     received = signature_header.removeprefix("sha256=")
 
@@ -74,3 +89,34 @@ async def github_webhook(
             return {"status": "dispatched", "event": event_type}
 
     return {"status": "ignored"}
+
+
+@app.post("/events/app")
+async def app_event(
+    request: Request,
+    x_nexus_signature_256: str = Header(None),
+):
+    """Принимает телеметрию и исключения от приложений через SDK."""
+    raw_body = await request.body()
+
+    if not verify_app_signature(raw_body, x_nexus_signature_256):
+        raise HTTPException(status_code=401, detail="Invalid or missing signature")
+
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    # Валидация необходимых полей
+    required_fields = {"project", "exception_type", "message", "traceback"}
+    if not required_fields.issubset(payload.keys()):
+        raise HTTPException(status_code=400, detail="Missing required event fields")
+
+    event_data = {
+        "event_type": "app:error",
+        "payload": payload
+    }
+
+    # Публикация в Redis Pub/Sub канал телеметрии
+    await redis_client.publish("nexus:pubsub:telemetry", json.dumps(event_data))
+    return {"status": "dispatched", "event": "app:error"}
