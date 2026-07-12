@@ -209,48 +209,21 @@ class TelegramNotifier:
     ) -> None:
         """
         Неблокирующий широковещательный ИИ-анализ логов аварии.
-        Вызывает ИИ один раз для экономии токенов и отправляет результат реплаем всем получателям.
+        Делегирует сборку контекста и вызов ИИ консолидированной службе AIService.
         """
         inc_id = incident_data["id"]
         project = incident_data["project"]
         resource = incident_data["resource"]
-        restart_count = incident_data.get("restart_count", 0)
-        logs = incident_data.get("logs") or "Логи отсутствуют."
 
         logger.info(
             f"Auto-AI: Starting post-incident broadcast diagnostics for Incident #{inc_id}..."
         )
 
         try:
-            system_prompt = (
-                "Вы — Nexus AI, опытный системный администратор и DevOps-эксперт.\n"
-                "Ниже представлены логи и контекст аварии в инфраструктуре.\n"
-                "Ваша задача: провести автоматическую экспресс-диагностику и дать ответ на русском языке.\n\n"
-                f"Инцидент: #{inc_id}\n"
-                f"Проект: {project.upper()}\n"
-                f"Сбойный сервис: {resource}\n"
-                f"Количество рестартов: {restart_count}\n\n"
-                f"Логи сбоя:\n{logs}\n\n"
-                "Сформулируйте профессиональный, предельно емкий отчет:\n"
-                "1. Суть ошибки (1-2 емкие фразы, почему упал).\n"
-                "2. Возможная техническая причина.\n"
-                "3. Рекомендуемые шаги по устранению (2-3 конкретных действия)."
-            )
+            # Вызов единого метода вместо дублирования сборки промпта
+            report = await ai_service.diagnose_incident(inc_id)
 
-            # Вызов ИИ-модели ОДИН раз
-            response = await ai_service.client.chat.completions.create(
-                model=settings.AITUNNEL_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": "Проанализируй аварию."},
-                ],
-                temperature=0.3,
-                max_tokens=600,
-            )
-
-            report = response.choices[0].message.content
-
-            # Кэшируем полученный отчет в инцидент в Redis
+            # Сохраняем полученный отчет в инцидент в Redis (кэшируем результат)
             try:
                 incident = await incident_service.get_incident(inc_id)
                 if incident:
@@ -279,23 +252,6 @@ class TelegramNotifier:
                     )
                 except Exception as e:
                     logger.error(f"Auto-AI: Failed to reply to admin {chat_id}: {e}")
-
-            # Фиксируем расход токенов ОДИН раз
-            usage = response.usage
-            if usage:
-                from services import event_bus
-
-                await event_bus.publish(
-                    "ai.request",
-                    {
-                        "project": "nexus_incident",
-                        "provider": "aitunnel",
-                        "model": settings.AITUNNEL_MODEL,
-                        "prompt_tokens": usage.prompt_tokens,
-                        "completion_tokens": usage.completion_tokens,
-                        "modality": "text",
-                    },
-                )
 
             logger.info(
                 f"Auto-AI: Post-incident analysis successfully broadcasted for #{inc_id}"

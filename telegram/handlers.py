@@ -537,11 +537,8 @@ async def process_incident_action(
             await callback.message.reply(
                 "🧠 <i>Requesting manual AI diagnostic report...</i>", parse_mode="HTML"
             )
-            system_prompt = (
-                f"Вы — Nexus AI. Проанализируйте аварию для инцидента #{incident_id}.\n"
-                f"Проект: {project}\nСервис: {resource}\nЛоги:\n{incident.logs}"
-            )
-            report = await ai_service.analyze_system(system_prompt)
+            # Вызов единого метода вместо сборки кастомного промпта
+            report = await ai_service.diagnose_incident(incident_id)
             await callback.message.reply(
                 f"🧠 <b>Manual AI Diagnose for #{incident_id}:</b>\n\n{report}",
                 parse_mode="HTML",
