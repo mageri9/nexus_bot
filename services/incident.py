@@ -6,6 +6,7 @@ from redis.asyncio import Redis
 from loguru import logger
 
 from services.query import QueryService
+from core.signal import Signal
 
 
 class Incident(BaseModel):
@@ -24,31 +25,29 @@ class Incident(BaseModel):
 
 
 class IncidentService:
-    def __init__(self, redis_client: Redis, query_service: QueryService, event_bus):
+    def __init__(self, redis_client: Redis, query_service: QueryService, event_bus, classifier=None):
         self.redis = redis_client
         self.query_service = query_service
         self.event_bus = event_bus
+        # Лениво импортируем для полной совместимости со старыми вызовами в фикстурах тестов
+        from services.classifier import Classifier
+        self.classifier = classifier or Classifier(redis_client)
 
     async def is_maintenance(self, project: str) -> bool:
-        """Проверяет, включен ли режим обслуживания для проекта."""
-        maintenance_key = f"nexus:maintenance:{project}"
-        return await self.redis.exists(maintenance_key) > 0
+        """Проксирует проверку обслуживания в классификатор (сохранение совместимости)"""
+        return await self.redis.exists(f"nexus:maintenance:{project}") > 0
 
     async def add_to_timeline(self, text: str, severity: str = "INFO") -> None:
-        """Добавляет событие в хронологическую ленту хоста (Datadog-lite)"""
+        """Добавляет событие в хронологическую ленту хоста"""
         try:
             now = datetime.now(timezone.utc)
             payload = {"timestamp": now.isoformat(), "text": text, "severity": severity}
             score = now.timestamp()
 
-            # Добавляем в Sorted Set в Redis
             await self.redis.zadd(
                 "nexus:timeline", {json.dumps(payload, ensure_ascii=False): score}
             )
-
-            # Ротируем ленту: оставляем только последние 50 записей для экономии памяти
             await self.redis.zremrangebyrank("nexus:timeline", 0, -51)
-
             logger.debug(f"Timeline: Added [{severity}] event: {text}")
         except Exception as e:
             logger.error(f"Failed to add event to timeline: {e}")
@@ -64,41 +63,58 @@ class IncidentService:
             return []
 
     async def on_devops_event(self, event_type: str, data: dict) -> None:
-        """Обработчик успешных/упавших CI/CD пайплайнов для фиксации в ленте"""
-        repo = data.get("repository", "unknown")
-        workflow = data.get("workflow_name", "pipeline")
+        """Преобразует событие DevOps в Signal и маршрутизирует через Classifier"""
+        signal = Signal(
+            project=data.get("repository", "unknown"),
+            resource=data.get("workflow_name", "pipeline"),
+            source="devops",
+            event_type=event_type,
+            status="success" if "success" in event_type else "failure",
+            payload=data
+        )
+
+        cs = await self.classifier.classify(signal)
+        if cs.action == "ignore":
+            return
+
+        repo = signal.project
+        workflow = signal.resource
         author = data.get("author", "unknown")
 
-        if event_type == "devops:workflow_success":
+        if cs.severity == "SUCCESS":
             text = f"🚀 CI/CD: Сборка {repo} ({workflow}) успешно завершена. Автор: @{author}"
             await self.add_to_timeline(text, "SUCCESS")
-        elif event_type == "devops:workflow_failure":
+        else:
             text = f"❌ CI/CD: Пайплайн {repo} ({workflow}) упал! Автор: @{author}"
             await self.add_to_timeline(text, "WARNING")
 
     async def on_resource_failed(self, event_type: str, data: dict) -> None:
-        project = data["agent"]
-        resource = data["resource"]
-        new_status = data["new_status"]
+        """Преобразует событие сбоя ресурса в Signal и маршрутизирует через Classifier"""
+        signal = Signal(
+            project=data["agent"],
+            resource=data["resource"],
+            source="collector",
+            event_type=event_type,
+            status=data["new_status"],
+            payload=data
+        )
 
-        # Если проект находится на обслуживании, игнорируем инцидент
-        if await self.is_maintenance(project):
-            logger.info(
-                f"IncidentService: Failure event for {project}:{resource} ignored due to maintenance mode."
-            )
+        cs = await self.classifier.classify(signal)
+        if cs.action == "ignore":
             return
+
+        project = signal.project
+        resource = signal.resource
+        severity = cs.severity
 
         active_key = f"nexus:incident:active:{project}:{resource}"
 
         incident_num = await self.redis.incr("nexus:incident:counter")
         incident_id = f"{incident_num}"
 
-        # Атомарная блокировка (SET NX с TTL 1 час)
         acquired = await self.redis.set(active_key, incident_id, nx=True)
         if not acquired:
-            logger.debug(
-                f"Incident for {project}:{resource} is already open. Skipping."
-            )
+            logger.debug(f"Incident for {project}:{resource} is already open. Skipping.")
             return
 
         logs = None
@@ -125,11 +141,7 @@ class IncidentService:
                 )
                 restart_count = int(raw_restarts.strip())
         except Exception as ex:
-            logger.debug(
-                f"Failed to fetch restart count via inspect for {project}:{resource}. Error: {ex}"
-            )
-
-        severity = "HIGH" if event_type == "ResourceStopped" else "MEDIUM"
+            logger.debug(f"Failed to fetch restart count for {project}:{resource}: {ex}")
 
         incident = Incident(
             id=incident_id,
@@ -138,7 +150,7 @@ class IncidentService:
             severity=severity,
             status="open",
             opened_at=datetime.now(timezone.utc),
-            reason=f"Resource transitioned to state: {new_status}",
+            reason=f"Resource transitioned to state: {signal.status}",
             logs=logs,
             restart_count=restart_count,
         )
@@ -148,53 +160,48 @@ class IncidentService:
         )
         await self.redis.lpush("nexus:incidents:history", incident_id)
 
-        # Пишем инцидент в ленту событий хоста
         await self.add_to_timeline(
             f"🚨 Сбой ресурса {project}:{resource} (рестарты: {restart_count})",
             severity=severity,
         )
 
-        logger.info(
-            f"🚨 IncidentService: Created Incident #{incident_id} for {project}:{resource}"
-        )
-
+        logger.info(f"🚨 IncidentService: Created Incident #{incident_id} for {project}:{resource}")
         await self.event_bus.publish("incident:opened", incident.model_dump())
 
     async def on_resource_recovered(self, event_type: str, data: dict) -> None:
-        """Обработчик события восстановления ресурса (ResourceRecovered)"""
-        project = data["agent"]
-        resource = data["resource"]
+        """Преобразует событие восстановления в Signal и маршрутизирует через Classifier"""
+        signal = Signal(
+            project=data["agent"],
+            resource=data["resource"],
+            source="collector",
+            event_type=event_type,
+            status="healthy",
+            payload=data
+        )
 
-        # Если проект на обслуживании, игнорируем восстановление
-        if await self.is_maintenance(project):
-            logger.info(
-                f"IncidentService: Recovery event for {project}:{resource} ignored due to maintenance mode."
-            )
+        cs = await self.classifier.classify(signal)
+        if cs.action == "ignore":
             return
+
+        project = signal.project
+        resource = signal.resource
 
         active_key = f"nexus:incident:active:{project}:{resource}"
         incident_id = await self.redis.get(active_key)
         if not incident_id:
-            logger.debug(
-                f"IncidentService: No active incident found for {project}:{resource} to resolve."
-            )
+            logger.debug(f"IncidentService: No active incident found for {project}:{resource} to resolve.")
             return
 
-        # Закрываем активный указатель в Redis
         await self.redis.delete(active_key)
 
-        # Считываем детальные данные инцидента
         detail_key = f"nexus:incident:detail:{incident_id}"
         raw_incident = await self.redis.get(detail_key)
         if not raw_incident:
-            logger.warning(
-                f"IncidentService: Active record #{incident_id} exists but details were not found."
-            )
+            logger.warning(f"IncidentService: Active record #{incident_id} exists but details were not found.")
             return
 
         incident = Incident.model_validate_json(raw_incident)
 
-        # Расчет длительности простоя
         resolved_at = datetime.now(timezone.utc)
         duration_seconds = (resolved_at - incident.opened_at).total_seconds()
 
@@ -202,10 +209,8 @@ class IncidentService:
         incident.resolved_at = resolved_at
         incident.duration = round(duration_seconds, 2)
 
-        # Сохраняем обновленный инцидент
         await self.redis.set(detail_key, incident.model_dump_json())
 
-        # Пишем восстановление в ленту событий хоста
         duration_str = (
             f"{incident.duration:.1f}с"
             if incident.duration < 60
@@ -219,9 +224,67 @@ class IncidentService:
         logger.info(
             f"✅ IncidentService: Incident #{incident_id} resolved. Outage duration: {incident.duration}s"
         )
-
-        # Публикуем событие завершения инцидента
         await self.event_bus.publish("incident:resolved", incident.model_dump())
+
+    async def on_app_error(self, event_type: str, data: dict) -> None:
+        """Регистрирует аварию на уровне приложения на основе сигнала от SDK"""
+        signal = Signal(
+            project=data["project"],
+            resource="app",
+            source="sdk",
+            event_type=event_type,
+            status="error",
+            payload=data,
+        )
+
+        cs = await self.classifier.classify(signal)
+        if cs.action == "ignore":
+            return
+
+        project = signal.project
+        resource = signal.resource
+        severity = cs.severity
+
+        active_key = f"nexus:incident:active:{project}:{resource}"
+
+        incident_num = await self.redis.incr("nexus:incident:counter")
+        incident_id = f"{incident_num}"
+
+        # Атомарный лок, чтобы не плодить дубли инцидентов по приложению
+        acquired = await self.redis.set(active_key, incident_id, nx=True)
+        if not acquired:
+            logger.debug(
+                f"Incident for {project}:{resource} is already open. Skipping."
+            )
+            return
+
+        logs = data.get("traceback") or "No traceback provided."
+        reason = f"Application Exception: {data.get('exception_type')} - {data.get('message')}"
+
+        incident = Incident(
+            id=incident_id,
+            project=project,
+            resource=resource,
+            severity=severity,
+            status="open",
+            opened_at=datetime.now(timezone.utc),
+            reason=reason,
+            logs=logs,
+            restart_count=0,
+        )
+
+        await self.redis.set(
+            f"nexus:incident:detail:{incident_id}", incident.model_dump_json()
+        )
+        await self.redis.lpush("nexus:incidents:history", incident_id)
+
+        await self.add_to_timeline(
+            f"🚨 Ошибка приложения {project.upper()}: {data.get('exception_type')}",
+            severity=severity,
+        )
+
+        logger.info(f"🚨 IncidentService: Created app Incident #{incident_id} for {project}:{resource}")
+        await self.event_bus.publish("incident:opened", incident.model_dump())
 
     async def get_incident(self, incident_id: str) -> Optional[Incident]:
         """Возвращает детальную модель инцидента по его ID"""
