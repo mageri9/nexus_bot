@@ -37,6 +37,12 @@ class EventStorage(ABC):
         """Возвращает историю снимков метрик для анализа."""
         pass
 
+    @abstractmethod
+    async def query_all_metric_snapshots(
+        self, limit: int = 10000
+    ) -> List[MetricSnapshot]:
+        """Возвращает все накопленные снимки метрик для построения обучающих выборок."""
+        pass
 
 class SqliteEventStorage(EventStorage):
     def __init__(self, db_path: str = "data/events.db"):
@@ -152,6 +158,33 @@ class SqliteEventStorage(EventStorage):
             for r in rows
         ]
 
+    def _query_all_metric_snapshots_sync(self, limit: int) -> List[MetricSnapshot]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT snapshot_id, timestamp, agent, resource, status, cpu, mem_perc, restarts
+                FROM metric_snapshots
+                ORDER BY timestamp ASC LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = cursor.fetchall()
+        return [
+            MetricSnapshot(
+                snapshot_id=r[0],
+                timestamp=datetime.fromisoformat(r[1]),
+                agent=r[2],
+                resource=r[3],
+                status=r[4],
+                cpu=r[5],
+                mem_perc=r[6],
+                restarts=r[7],
+            )
+            for r in rows
+        ]
+
+
     async def save(self, record: EventRecord) -> None:
         await asyncio.to_thread(self._save_sync, record)
 
@@ -163,3 +196,6 @@ class SqliteEventStorage(EventStorage):
 
     async def query_metric_snapshots(self, agent: str, resource: str, limit: int = 100) -> List[MetricSnapshot]:
         return await asyncio.to_thread(self._query_metric_snapshots_sync, agent, resource, limit)
+
+    async def query_all_metric_snapshots(self, limit: int = 10000) -> List[MetricSnapshot]:
+        return await asyncio.to_thread(self._query_all_metric_snapshots_sync, limit)

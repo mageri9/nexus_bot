@@ -360,3 +360,116 @@ async def test_telegram_notifier_sends_anomaly_alert(fake_redis):
 
     await notifier.on_anomaly_detected("ml:anomaly_detected", data)
     assert mock_bot.send_message.call_count == 0  # Сообщение не должно быть отправлено
+
+
+@pytest.mark.asyncio
+async def test_incident_prediction_task_build_dataset(temp_db_path):
+    from intelligence.tasks.incident_prediction import IncidentPredictionTask
+    from intelligence.models import MetricSnapshot, EventRecord
+    from datetime import datetime, timezone, timedelta
+
+    storage = SqliteEventStorage(db_path=temp_db_path)
+    task = IncidentPredictionTask(storage)
+
+    now = datetime.now(timezone.utc)
+
+    # 1. Записываем снимок, после которого БУДЕТ инцидент в интервале 30 минут
+    await storage.save_metric_snapshot(
+        MetricSnapshot(
+            snapshot_id="snap_1",
+            timestamp=now,
+            agent="nexus",
+            resource="app",
+            status="running",
+            cpu="15.0%",
+            mem_perc="25.0%",
+            restarts=0,
+        )
+    )
+
+    # 2. Записываем снимок, после которого инцидентов НЕ будет
+    await storage.save_metric_snapshot(
+        MetricSnapshot(
+            snapshot_id="snap_2",
+            timestamp=now + timedelta(hours=5),
+            agent="nexus",
+            resource="app",
+            status="running",
+            cpu="5.0%",
+            mem_perc="15.0%",
+            restarts=0,
+        )
+    )
+
+    # Записываем инцидент, случившийся через 15 минут после snap_1
+    await storage.save(
+        EventRecord(
+            event_type="incident:opened",
+            project="nexus",
+            resource="app",
+            severity="HIGH",
+            source="incident",
+            payload_json="{}",
+            timestamp=now + timedelta(minutes=15),
+        )
+    )
+
+    # Строим датасет
+    df = await task.build_dataset()
+
+    assert not df.empty
+    assert len(df) == 2
+
+    # Сортируем для однозначности проверки
+    df_sorted = df.sort_values(by="timestamp")
+    row_1 = df_sorted.iloc[0]
+    row_2 = df_sorted.iloc[1]
+
+    # Снимок 1 должен получить разметку target = 1.0 (всплеск привел к инциденту)
+    assert row_1["event_id"] == "snap_1"
+    assert row_1["target"] == 1.0
+    assert row_1["cpu"] == 15.0
+
+    # Снимок 2 должен получить разметку target = 0.0 (тишина)
+    assert row_2["event_id"] == "snap_2"
+    assert row_2["target"] == 0.0
+    assert row_2["cpu"] == 5.0
+
+
+def test_train_and_predict_with_mock_model():
+    from unittest.mock import MagicMock, patch
+    from intelligence.tasks.incident_prediction import IncidentPredictionTask
+    import pandas as pd
+
+    df = pd.DataFrame(
+        [
+            {
+                "cpu": 10.0,
+                "mem_perc": 20.0,
+                "restarts": 0,
+                "status_healthy": 1.0,
+                "target": 0.0,
+            },
+            {
+                "cpu": 90.0,
+                "mem_perc": 80.0,
+                "restarts": 2,
+                "status_healthy": 0.0,
+                "target": 1.0,
+            },
+        ]
+    )
+
+    task = IncidentPredictionTask(None)
+
+    # Имитируем поведение обученного классификатора CatBoost
+    mock_cb = MagicMock()
+    mock_cb.predict_proba.return_value = [[0.1, 0.9]]
+
+    with patch("catboost.CatBoostClassifier", return_value=mock_cb):
+        task.train(df)
+        assert mock_cb.fit.call_count == 1
+
+        risk = task.predict({"cpu": 90.0, "mem_perc": 80.0})
+        assert risk == 0.9
+        assert mock_cb.predict_proba.call_count == 1
