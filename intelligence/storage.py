@@ -161,15 +161,20 @@ class SqliteEventStorage(EventStorage):
     def _query_all_metric_snapshots_sync(self, limit: int) -> List[MetricSnapshot]:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            # ORDER BY ... ASC LIMIT ? возвращает САМЫЕ СТАРЫЕ N снимков, как только
+            # их накопится больше limit — обучающий датасет тогда молча застревает
+            # на устаревшем окне и перестаёт видеть свежие инциденты и метрики.
+            # Берём последние N по времени (DESC), затем разворачиваем обратно
+            # в хронологический порядок для build_dataset()/time-split.
             cursor.execute(
                 """
                 SELECT snapshot_id, timestamp, agent, resource, status, cpu, mem_perc, restarts
                 FROM metric_snapshots
-                ORDER BY timestamp ASC LIMIT ?
+                ORDER BY timestamp DESC LIMIT ?
                 """,
                 (limit,),
             )
-            rows = cursor.fetchall()
+            rows = cursor.fetchall()[::-1]
         return [
             MetricSnapshot(
                 snapshot_id=r[0],
