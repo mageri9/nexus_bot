@@ -20,11 +20,13 @@ health_engine = HealthEngine()
 query_service = QueryService(registry=registry, redis_client=redis_client, health_engine=health_engine)
 event_bus = EventBus()
 command_service = CommandService(registry=registry, event_bus=event_bus)
+
 state_collector = StateCollector(
     registry=registry,
     redis_client=redis_client,
     event_bus=event_bus,
-    debounce_ticks=settings.COLLECTOR_DEBOUNCE_TICKS
+    debounce_ticks=settings.COLLECTOR_DEBOUNCE_TICKS,
+    health_engine=health_engine,
 )
 # Инициализация сборщика логов
 log_collector = LogCollector(registry=registry, redis_client=redis_client)

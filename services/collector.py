@@ -5,6 +5,7 @@ from loguru import logger
 from redis.asyncio import Redis
 from core import AgentRegistry
 from services.event_bus import EventBus
+from services.health_engine import HealthEngine
 from infra import DockerContainer, HostDiskResource, ProjectStorageResource
 
 
@@ -16,6 +17,7 @@ class StateCollector:
         event_bus: EventBus,
         interval: int = 5,
         debounce_ticks: int = 1,
+        health_engine: HealthEngine = None,
     ):
         self.registry = registry
         self.redis = redis_client
@@ -23,8 +25,7 @@ class StateCollector:
         self.interval = interval
         self.debounce_ticks = debounce_ticks
         self._task: asyncio.Task | None = None
-        # Хранилище для дребезга переходов состояний:
-        # {agent_name: {resource_name: (target_status, count)}}
+        self.health_engine = health_engine or HealthEngine()
         self._pending_transitions: dict[str, dict[str, tuple[str, int]]] = {}
 
     def start(self) -> None:
@@ -283,10 +284,23 @@ class StateCollector:
                                 "ResourceDeleted", deleted_payload
                             )
 
-                    # Сохраняем версионированный слепок состояния State V2
                     await self.redis.set(key, json.dumps(state_v2))
 
-                # В конце каждого тика запускаем проверку затухания повторов исключений приложений
+                    # 4. Расчет Health Score и запись во временной ряд в Redis
+                    score = self.health_engine.calculate_score(state_v2)
+                    if score != -1:  # Игнорируем маркер инициализации / отсутствия данных
+                        now = datetime.now(timezone.utc)
+                        history_key = f"nexus:health:history:{agent_name}"
+                        history_payload = {
+                            "score": score,
+                            "timestamp": now.isoformat()
+                        }
+                        # В качестве score для Sorted Set используем timestamp в секундах
+                        await self.redis.zadd(history_key, {json.dumps(history_payload): now.timestamp()})
+                        # Ротируем ряд: оставляем только последние 100 замеров
+                        await self.redis.zremrangebyrank(history_key, 0, -101)
+
+                    # В конце каждого тика запускаем проверку затухания повторов исключений приложений
                 await self._check_app_auto_recovery()
 
             except Exception as e:

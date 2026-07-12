@@ -110,6 +110,8 @@ async def build_dashboard_content() -> tuple[str, types.InlineKeyboardMarkup]:
     for agent_name in agent_names:
         agent_details = await query_service.get_agent_details(agent_name)
         score = query_service.calculate_health_score(agent_name, agent_details)
+        # Получаем динамику здоровья
+        trend = await query_service.get_health_trend(agent_name)
 
         # Обработка маркера инициализации
         if score == -1:
@@ -124,7 +126,7 @@ async def build_dashboard_content() -> tuple[str, types.InlineKeyboardMarkup]:
             else:
                 score_emoji = "🔴"
 
-        report_lines.append(f"{score_emoji} <b>{agent_name.upper()}</b> | Health: <b>{score_str}</b>")
+        report_lines.append(f"{score_emoji} <b>{agent_name.upper()}</b> | Health: <b>{score_str}</b>{trend}")
 
     # 1. Извлечение емкости системного диска
     nexus_details = await query_service.get_agent_details("nexus")
@@ -189,6 +191,7 @@ async def build_agent_detail_content(agent_name: str) -> tuple[str, types.Inline
     """Генерирует детальную панель Слоя 2 (Agent Drill-down)"""
     agent_details = await query_service.get_agent_details(agent_name)
     score = query_service.calculate_health_score(agent_name, agent_details)
+    trend = await query_service.get_health_trend(agent_name)  # <-- Получаем динамику здоровья
 
     # Обработка маркера инициализации
     if score == -1:
@@ -205,7 +208,7 @@ async def build_agent_detail_content(agent_name: str) -> tuple[str, types.Inline
 
     report_lines = [
         f"{score_emoji} <b>{agent_name.upper()} Agent Panel</b>",
-        f"Health Score: <b>{score_str}</b>\n",
+        f"Health Score: <b>{score_str}</b>{trend}\n",
         "<b>Status Details:</b>"
     ]
 

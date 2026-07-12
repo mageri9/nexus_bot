@@ -122,3 +122,65 @@ async def test_get_resource_logs_from_redis_buffer_first(
     # Должны получить данные из кэша без задействования транспорта
     assert logs == "buffered log 1\nbuffered log 2"
     assert len(scripted_transport.calls) == 0  # Скрипт транспорта не вызывался вовсе
+
+
+async def test_get_agent_health_history_retrieves_sorted_set(query_service, fake_redis):
+    key = "nexus:health:history:nexus"
+
+    # Имитируем запись трех хронологических замеров здоровья
+    await fake_redis.zadd(
+        key,
+        {
+            json.dumps(
+                {"score": 80, "timestamp": "2026-07-12T05:00:00Z"}
+            ): 1718100000.0,
+            json.dumps(
+                {"score": 90, "timestamp": "2026-07-12T05:01:00Z"}
+            ): 1718100060.0,
+            json.dumps(
+                {"score": 95, "timestamp": "2026-07-12T05:02:00Z"}
+            ): 1718100120.0,
+        },
+    )
+
+    history = await query_service.get_agent_health_history("nexus", limit=10)
+    assert len(history) == 3
+    assert history[0]["score"] == 80
+    assert history[1]["score"] == 90
+    assert history[2]["score"] == 95
+
+
+async def test_get_health_trend_directions(query_service, fake_redis):
+    key = "nexus:health:history:nexus"
+
+    # 1. Сценарий: Улучшение здоровья (тренд вверх)
+    await fake_redis.zadd(
+        key,
+        {
+            json.dumps({"score": 85, "timestamp": "2026-07-12T05:00:00Z"}): 1.0,
+            json.dumps({"score": 95, "timestamp": "2026-07-12T05:01:00Z"}): 2.0,
+        },
+    )
+    assert await query_service.get_health_trend("nexus") == " 📈"
+
+    # 2. Сценарий: Деградация здоровья (тренд вниз)
+    await fake_redis.delete(key)
+    await fake_redis.zadd(
+        key,
+        {
+            json.dumps({"score": 95, "timestamp": "2026-07-12T05:00:00Z"}): 1.0,
+            json.dumps({"score": 85, "timestamp": "2026-07-12T05:01:00Z"}): 2.0,
+        },
+    )
+    assert await query_service.get_health_trend("nexus") == " 📉"
+
+    # 3. Сценарий: Стабильность (изменений нет)
+    await fake_redis.delete(key)
+    await fake_redis.zadd(
+        key,
+        {
+            json.dumps({"score": 90, "timestamp": "2026-07-12T05:00:00Z"}): 1.0,
+            json.dumps({"score": 90, "timestamp": "2026-07-12T05:01:00Z"}): 2.0,
+        },
+    )
+    assert await query_service.get_health_trend("nexus") == " ➡️"

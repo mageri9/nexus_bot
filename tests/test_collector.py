@@ -515,3 +515,23 @@ async def test_app_error_auto_recovery_resolves_stale_incident(
     payload = recording_subscriber.received[0][1]
     assert payload["agent"] == "tarot_bot"
     assert payload["resource"] == "app"
+
+
+async def test_collector_tick_records_health_history_time_series(
+    registry, fake_redis, event_bus, scripted_transport
+):
+    container = make_docker_container(scripted_transport, "running")
+    registry.register(ProjectAgent(name="nexus", resources={"app": container}))
+
+    collector = make_collector(registry, fake_redis, event_bus)
+
+    # Выполняем один тик сбора данных
+    await run_one_collector_tick(collector)
+
+    # Проверяем, что в Redis создана и наполнена история замеров здоровья
+    history_raw = await fake_redis.zrange("nexus:health:history:nexus", 0, -1)
+    assert len(history_raw) == 1
+
+    entry = json.loads(history_raw[0])
+    assert entry["score"] == 100  # Здоровье контейнера в идеальном состоянии
+    assert "timestamp" in entry

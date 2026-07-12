@@ -85,3 +85,33 @@ class QueryService:
         Делегирует исполнение модульному HealthEngine.
         """
         return self.health_engine.calculate_score(state_details)
+
+    async def get_agent_health_history(
+        self, agent_name: str, limit: int = 24
+    ) -> List[Dict[str, Any]]:
+        """Возвращает историю показателей здоровья агента из временного ряда в Redis"""
+        key = f"nexus:health:history:{agent_name}"
+        # Извлекаем элементы по возрастанию метки времени (от старых к новым)
+        raw_elements = await self.redis.zrange(key, -limit, -1)
+        return [json.loads(el) for el in raw_elements]
+
+    async def get_health_trend(self, agent_name: str) -> str:
+        """Определяет тренд здоровья на основе сопоставления двух последних замеров"""
+        try:
+            history = await self.get_agent_health_history(agent_name, limit=2)
+            if len(history) < 2:
+                return ""
+
+            old_score = history[0]["score"]
+            new_score = history[1]["score"]
+
+            if new_score > old_score:
+                return " 📈"
+            elif new_score < old_score:
+                return " 📉"
+            return " ➡️"
+        except Exception:
+            return ""
+
+    def calculate_health_score(self, agent_name: str, state_details: dict) -> int:
+        return self.health_engine.calculate_score(state_details)
