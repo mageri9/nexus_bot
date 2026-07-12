@@ -51,3 +51,18 @@ event_bus.subscribe("ai.request", ai_service.on_ai_request)
 # Подписываем IncidentService на сборки для логирования в общую ленту событий хоста
 event_bus.subscribe("devops:workflow_success", incident_service.on_devops_event)
 event_bus.subscribe("devops:workflow_failure", incident_service.on_devops_event)
+
+
+async def on_app_heartbeat(event_type: str, data: dict) -> None:
+    """Сохраняет время последнего полученного пульса от приложения в Redis"""
+    project = data.get("project")
+    if project:
+        timestamp = data.get("timestamp")
+        # Если в пакете нет временной метки, используем текущее время сервера
+        if not timestamp:
+            from datetime import datetime, timezone
+            timestamp = datetime.now(timezone.utc).isoformat()
+        await redis_client.set(f"nexus:heartbeat:{project}", timestamp)
+
+# Подписываем обработчик на внутренние события шины
+event_bus.subscribe("app:heartbeat", on_app_heartbeat)

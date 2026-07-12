@@ -1,7 +1,6 @@
-# agents/manifest.py в проекте Nexus
 from core import ProjectAgent
 from transports import LocalShellTransport
-from infra import DockerContainer, HostDiskResource, ProjectStorageResource
+from infra import DockerContainer, HostDiskResource, ProjectStorageResource, ApplicationHeartbeat
 
 local_transport = LocalShellTransport()
 
@@ -22,7 +21,8 @@ tarot_agent = ProjectAgent(
         "bot": DockerContainer("bot", local_transport, "tarot_bot"),
         "postgres": DockerContainer("postgres", local_transport, "tarot_bot_postgres"),
         # Локальный Redis удален — бот переведен на общий пул
-        "data_disk": ProjectStorageResource("data_disk", local_transport, "/host_root/home/mageri9/apps/tarot_bot")
+        "data_disk": ProjectStorageResource("data_disk", local_transport, "/host_root/home/mageri9/apps/tarot_bot"),
+        "heartbeat": ApplicationHeartbeat("heartbeat", "tarot_bot", max_gap_seconds=30)
     }
 )
 

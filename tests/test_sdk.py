@@ -46,3 +46,35 @@ async def test_sdk_correctly_formats_and_signs_payload():
         assert headers["X-Nexus-Signature-256"] == f"sha256={expected_sig}"
 
     await sdk.close()
+
+
+@pytest.mark.asyncio
+async def test_sdk_sends_periodic_heartbeats():
+    sdk = NexusSDK(
+        endpoint_url="http://nexus/events/app",
+        app_secret="super-secret-key",
+        project_name="imagebot",
+    )
+
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 200
+
+    with patch.object(sdk._client, "post", return_value=mock_resp) as mock_post:
+        # Запускаем отправку с ультра-коротким интервалом в 0.01с
+        task = sdk.start_heartbeat(interval_seconds=0.01)
+
+        # Даем отработать корутине несколько циклов
+        await asyncio.sleep(0.025)
+
+        # Мягко останавливаем SDK
+        await sdk.close()
+
+        # Проверяем, что корутина успела совершить вызовы
+        assert mock_post.call_count >= 2
+
+        # Проверяем формат пересылаемого Heartbeat-пакета
+        args, kwargs = mock_post.call_args
+        payload = json.loads(kwargs["content"].decode())
+        assert payload["project"] == "imagebot"
+        assert payload["event_type"] == "app:heartbeat"
+        assert "timestamp" in payload

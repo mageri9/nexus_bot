@@ -96,7 +96,7 @@ async def app_event(
     request: Request,
     x_nexus_signature_256: str = Header(None),
 ):
-    """Принимает телеметрию и исключения от приложений через SDK."""
+    """Принимает телеметрию, исключения и пульс от приложений через SDK."""
     raw_body = await request.body()
 
     if not verify_app_signature(raw_body, x_nexus_signature_256):
@@ -107,16 +107,27 @@ async def app_event(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    # Валидация необходимых полей
-    required_fields = {"project", "exception_type", "message", "traceback"}
-    if not required_fields.issubset(payload.keys()):
-        raise HTTPException(status_code=400, detail="Missing required event fields")
+    if "project" not in payload:
+        raise HTTPException(status_code=400, detail="Missing required 'project' field")
+
+    event_type = payload.get("event_type", "app:error")
+
+    # Валидация структуры под каждый тип событий
+    if event_type == "app:error":
+        required_fields = {"exception_type", "message", "traceback"}
+        if not required_fields.issubset(payload.keys()):
+            raise HTTPException(status_code=400, detail="Missing required error fields")
+    elif event_type == "app:heartbeat":
+        # Для пульса достаточно валидного поля project
+        pass
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported event_type: {event_type}")
 
     event_data = {
-        "event_type": "app:error",
+        "event_type": event_type,
         "payload": payload
     }
 
     # Публикация в Redis Pub/Sub канал телеметрии
     await redis_client.publish("nexus:pubsub:telemetry", json.dumps(event_data))
-    return {"status": "dispatched", "event": "app:error"}
+    return {"status": "dispatched", "event": event_type}
