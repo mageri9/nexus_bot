@@ -30,6 +30,12 @@ class StateCollector:
         self.event_storage = event_storage
         self._pending_transitions: dict[str, dict[str, tuple[str, int]]] = {}
 
+        # Инициализируем и загружаем ИИ-предиктор рисков
+        from intelligence.predictor import IncidentPredictor
+
+        self.predictor = IncidentPredictor()
+        self.predictor.load_latest_model()
+
     def start(self) -> None:
         """Запускает фоновый цикл сбора данных"""
         logger.info("Starting background StateCollector loop...")
@@ -300,11 +306,23 @@ class StateCollector:
                         try:
                             await self._save_snapshots_for_agent(state_v2)
                         except Exception as e:
-                            logger.error(f"Collector: Failed to save metric snapshots: {e}")
+                            logger.error(
+                                f"Collector: Failed to save metric snapshots: {e}"
+                            )
 
                     # 4. Расчет Health Score и запись во временной ряд в Redis
                     score = self.health_engine.calculate_score(state_v2)
-                    if score != -1:  # Игнорируем маркер инициализации / отсутствия данных
+                    if (
+                        score != -1
+                    ):  # Игнорируем маркер инициализации / отсутствия данных
+                        # Запускаем ИИ-предиктор рисков аварий
+                        try:
+                            await self._run_ml_predictions_for_agent(state_v2, score)
+                        except Exception as ex:
+                            logger.error(
+                                f"Predictor: Risk prediction failed for agent {agent_name}: {ex}"
+                            )
+
                         now = datetime.now(timezone.utc)
                         history_key = f"nexus:health:history:{agent_name}"
                         history_payload = {
@@ -455,7 +473,75 @@ class StateCollector:
                         "metric": "mem_perc",
                         "current_value": f"{current_mem}%",
                         "mean": f"{mean:.2f}%",
-                        "std": f"{std:.2f}"
+                        "std": f"{std:.2f}",
+                    },
+                )
+
+    async def _run_ml_predictions_for_agent(
+        self, state_v2: dict, agent_health_score: int
+    ) -> None:
+        if not self.predictor or not self.predictor.model:
+            return
+
+        from config import settings
+        from intelligence.anomaly import parse_float_metric
+
+        agent_name = state_v2.get("agent_name", "unknown")
+
+        for res_name, res_data in state_v2.get("containers", {}).items():
+            metrics = res_data.get("metrics", {})
+            status = res_data.get("status", "unknown")
+
+            cpu = 0.0
+            mem_perc = 0.0
+            restarts = 0
+            if isinstance(metrics, dict):
+                cpu = parse_float_metric(metrics.get("cpu", {}).get("value")) or 0.0
+                mem_perc = (
+                    parse_float_metric(metrics.get("mem_perc", {}).get("value")) or 0.0
+                )
+                try:
+                    restarts = int(metrics.get("restarts", {}).get("value", 0))
+                except (ValueError, TypeError):
+                    pass
+
+            features = {
+                "cpu": cpu,
+                "mem_perc": mem_perc,
+                "restarts": restarts,
+                "status_healthy": 1.0 if status in ("running", "healthy") else 0.0,
+            }
+
+            # 1. Прогноз риска по модели ИИ
+            ml_risk = self.predictor.predict_risk(features)
+
+            # 2. Оценка риска по классическим правилам HealthEngine
+            # Переводим шкалу здоровья [0-100] в шкалу вероятности сбоя [0.0-1.0]
+            engine_risk = (100 - agent_health_score) / 100.0
+
+            # 3. Baseline-гейт: сравниваем оценки рисков
+            risk_threshold = getattr(settings, "PREDICTOR_RISK_THRESHOLD", 0.6)
+            discrepancy_threshold = getattr(
+                settings, "PREDICTOR_DISCREPANCY_THRESHOLD", 0.4
+            )
+
+            # Шлем алерт, только если ИИ прогнозирует критический риск,
+            # который традиционный мониторинг на правилах не замечает (или считает слабым)
+            if (
+                ml_risk >= risk_threshold
+                and (ml_risk - engine_risk) >= discrepancy_threshold
+            ):
+                logger.warning(
+                    f"Predictor: HIGH RISK of incident detected for {agent_name}:{res_name}! "
+                    f"ML Risk={ml_risk:.2f}, Engine Risk={engine_risk:.2f}"
+                )
+                await self.event_bus.publish(
+                    "ml:incident_risk_detected",
+                    {
+                        "project": agent_name,
+                        "resource": res_name,
+                        "ml_risk": ml_risk,
+                        "health_score": agent_health_score
                     }
                 )
 

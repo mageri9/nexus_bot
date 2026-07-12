@@ -473,3 +473,60 @@ def test_train_and_predict_with_mock_model():
         risk = task.predict({"cpu": 90.0, "mem_perc": 80.0})
         assert risk == 0.9
         assert mock_cb.predict_proba.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_predictor_detects_risk_discrepancy(fake_redis, event_bus, registry):
+    from services.collector import StateCollector
+    from unittest.mock import MagicMock
+
+    # Инициализируем StateCollector
+    collector = StateCollector(
+        registry=registry,
+        redis_client=fake_redis,
+        event_bus=event_bus,
+        interval=5,
+        debounce_ticks=1
+    )
+
+    # Имитируем обученную CatBoost модель предиктора
+    mock_model = MagicMock()
+    # Модель предсказывает вероятность 0.85 (85%) для класса 1 (авария)
+    mock_model.predict_proba.return_value = [[0.15, 0.85]]
+    collector.predictor.model = mock_model
+
+    # Настраиваем слушатель шины событий для прогноза рисков
+    published_risks = []
+    async def sub_risk(et, data):
+        published_risks.append(data)
+    event_bus.subscribe("ml:incident_risk_detected", sub_risk)
+
+    # Моделируем идеальные метрики контейнера (здоровье по правилам 100%)
+    state_v2 = {
+        "version": 2,
+        "agent_name": "tarot_bot",
+        "timestamp": "2026-07-12T00:00:00Z",
+        "containers": {
+            "app": {
+                "status": "running",
+                "metrics": {
+                    "cpu": {"value": "10.0%"},
+                    "mem_perc": {"value": "20.0%"},
+                    "restarts": {"value": 0}
+                }
+            }
+        },
+        "storage": {}
+    }
+
+    # Запускаем предиктивный анализ напрямую.
+    # Health Score равен 100 (то есть риск по правилам равен 0.0).
+    # ИИ риск равен 0.85. Расхождение 0.85 - 0.0 = 0.85 >= 0.4. Алерт должен сработать!
+    await collector._run_ml_predictions_for_agent(state_v2, agent_health_score=100)
+
+    assert len(published_risks) == 1
+    risk_payload = published_risks[0]
+    assert risk_payload["project"] == "tarot_bot"
+    assert risk_payload["resource"] == "app"
+    assert risk_payload["ml_risk"] == 0.85
+    assert risk_payload["health_score"] == 100

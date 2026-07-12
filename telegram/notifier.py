@@ -285,4 +285,44 @@ class TelegramNotifier:
                     chat_id=admin_id, text=text, parse_mode="HTML"
                 )
             except Exception as e:
-                logger.error(f"Notifier: Failed to send anomaly alert to admin {admin_id}: {e}")
+                logger.error(
+                    f"Notifier: Failed to send anomaly alert to admin {admin_id}: {e}"
+                )
+
+
+    async def on_incident_risk_detected(self, event_type: str, data: dict) -> None:
+        """
+        Оповещает администраторов о предиктивно обнаруженном риске инцидента.
+        Использует режим тишины для исключения лишнего спама.
+        """
+        project = data.get("project", "unknown")
+        resource = data.get("resource", "unknown")
+        ml_risk = data.get("ml_risk", 0.0)
+        health_score = data.get("health_score", 100)
+
+        # 1. Проверяем режим тишины
+        silence_key = f"nexus:silence:{project}:{resource}"
+        if await redis_client.exists(silence_key):
+            logger.info(
+                f"Notifier: Predictive risk alert for {project}:{resource} suppressed due to silence."
+            )
+            return
+
+        # 2. Форматируем сообщение
+        text = (
+            f"🔮 <b>[ПРОГНОЗ] Высокая угроза инцидента!</b>\n\n"
+            f"<b>Проект:</b> <code>{project.upper()}</code>\n"
+            f"<b>Ресурс:</b> <code>{resource}</code>\n\n"
+            f"<b>Вероятность аварии (ML):</b> 🔴 <code>{ml_risk * 100:.1f}%</code>\n"
+            f"<b>Текущее здоровье (Правила):</b> 🟢 <code>{health_score}%</code>\n\n"
+            f"<i>ИИ прогнозирует критический сбой в течение ближайших 30 минут, хотя правила не фиксируют активных проблем. Рекомендуется ручная проверка.</i>"
+        )
+
+        # 3. Рассылка администраторам
+        for admin_id in self.admin_ids:
+            try:
+                await self.bot.send_message(
+                    chat_id=admin_id, text=text, parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(f"Notifier: Failed to send predictive risk alert to admin {admin_id}: {e}")

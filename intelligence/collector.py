@@ -27,6 +27,7 @@ KNOWN_EVENTS = [
     "incident:resolved",
     "ai.request",
     "ml:anomaly_detected",
+    "ml:incident_risk_detected",
 ]
 
 
@@ -93,6 +94,12 @@ class IntelligenceCollector:
             project = payload.get("project", "unknown")
             resource = payload.get("resource", "unknown")
             return project, resource, "WARNING", "intelligence"
+
+        # Обработка события прогноза рисков ИИ
+        if event_type == "ml:incident_risk_detected":
+            project = payload.get("project", "unknown")
+            resource = payload.get("resource", "unknown")
+            return project, resource, "WARNING", "predictor"
 
         # 1. Сценарий: События, совместимые с сигналами (проходят классификатор)
         signal_compatible = {

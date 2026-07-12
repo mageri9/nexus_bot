@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     AITUNNEL_BASE_URL: str = "https://api.aitunnel.ru/v1/"
     AITUNNEL_MODEL: str = "gemma-4-31b-it"  # Google Gemma 4
 
+    # Конфигурация прогнозирования рисков (ML Predictor)
+    PREDICTOR_RISK_THRESHOLD: float = (
+        0.6  # Порог вероятности сбоя, при котором бьем тревогу
+    )
+    PREDICTOR_DISCREPANCY_THRESHOLD: float = (
+        0.4  # Минимальное расхождение между оценкой ML и правилами
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
