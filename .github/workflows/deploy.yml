@@ -10,6 +10,13 @@ permissions:
   contents: read
   packages: write
 
+env:
+  # TTL защитного флага техобслуживания (в секундах). Должен с запасом
+  # покрывать время между `docker compose up -d --force-recreate` и
+  # моментом, когда StateCollector успеет опросить обновлённые контейнеры
+  # хотя бы раз. Флаг истекает сам по себе — explicit DELETE не нужен.
+  MAINTENANCE_TTL_SECONDS: "180"
+
 jobs:
   # === ЛЕГКОВЕСНЫЙ ДЖОБ ТЕСТИРОВАНИЯ ===
   test:
@@ -88,19 +95,23 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_KEY }}
+          envs: MAINTENANCE_TTL_SECONDS
           script: |
             cd ~/apps/nexus
             OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
             GHCR_IMAGE_NAME="ghcr.io/${OWNER_LOWER}/nexus"
-            
+
             # Динамически прописываем или обновляем переменную GHCR_IMAGE_NAME в .env
             grep -q '^GHCR_IMAGE_NAME=' .env \
               && sed -i "s|^GHCR_IMAGE_NAME=.*|GHCR_IMAGE_NAME=${GHCR_IMAGE_NAME}|" .env \
               || echo "GHCR_IMAGE_NAME=${GHCR_IMAGE_NAME}" >> .env
-            
+
+            docker exec nexus-redis redis-cli SET nexus:maintenance:nexus 1 EX "${MAINTENANCE_TTL_SECONDS}" \
+              || echo "::warning::Could not set maintenance flag (redis not up yet?), continuing anyway"
+
             # Обновляем образы и перезапускаем весь стек
             docker compose pull
             docker compose up -d --force-recreate
-            
+
             # Очищаем неиспользуемые старые образы для экономии диска
             docker image prune -f

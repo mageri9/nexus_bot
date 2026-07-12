@@ -9,8 +9,8 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     ADMIN_IDS: str = "0"
 
-    # Конфигурация StateCollector
-    COLLECTOR_DEBOUNCE_TICKS: int = 1
+    # Конфигурация StateCollector.
+    COLLECTOR_DEBOUNCE_TICKS: int = 2
     APP_ERROR_AUTO_RECOVERY_THRESHOLD: int = 60
 
     # Конфигурация шлюза AITUNNEL
