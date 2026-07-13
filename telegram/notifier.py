@@ -264,6 +264,16 @@ class TelegramNotifier:
             )
             return
 
+        # 1.5. Cooldown/дедуп: не слать один и тот же алерт (project:resource:metric) чаще раза в 20 минут.
+        # set с NX+EX атомарно совмещает роль "уже отправляли" и таймера — если ключ уже есть, was_set=None.
+        cooldown_key = f"nexus:anomaly_cooldown:{project}:{resource}:{metric}"
+        was_set = await redis_client.set(cooldown_key, "1", ex=1200, nx=True)
+        if not was_set:
+            logger.info(
+                f"Notifier: Anomaly alert for {project}:{resource}:{metric} suppressed by cooldown."
+            )
+            return
+
         # 2. Форматируем сообщение
         metric_display = (
             "Процессор (CPU)" if metric == "cpu" else "Оперативная память (RAM)"
