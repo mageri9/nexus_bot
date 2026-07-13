@@ -44,6 +44,23 @@ nexus_agent = ProjectAgent(
         "app": DockerContainer("app", local_transport, "nexus-core"),
         "webhook": DockerContainer("webhook", local_transport, "nexus-webhook"),
         "redis": DockerContainer("redis", local_transport, "nexus-redis"),
-        "root_disk": HostDiskResource("root_disk", local_transport, "/host_root")
-    }
+        "root_disk": HostDiskResource("root_disk", local_transport, "/host_root"),
+    },
+)
+
+# Проект 5: Binance Quant Bot (MarketMind)
+quant_agent = ProjectAgent(
+    name="binance_quant_bot",
+    resources={
+        "bot": DockerContainer("bot", local_transport, "binance_quant_bot"),
+        "redis": DockerContainer("redis", local_transport, "bot-redis"),
+        "data_disk": ProjectStorageResource(
+            "data_disk",
+            local_transport,
+            "/host_root/home/mageri9/apps/binance_quant_bot/src/db",
+        ),
+        "heartbeat": ApplicationHeartbeat(
+            "heartbeat", "binance_quant_bot", max_gap_seconds=30
+        ),
+    },
 )
