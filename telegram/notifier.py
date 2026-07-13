@@ -7,6 +7,10 @@ from loguru import logger
 
 from config import settings
 from services import query_service, redis_client, ai_service, incident_service
+from services.diagnostics import get_postgres_snapshot
+from agents import registry
+from infra import DockerContainer
+
 
 
 # Контракт для Callback-данных кнопок инцидента
@@ -247,7 +251,10 @@ class TelegramNotifier:
     async def on_anomaly_detected(self, event_type: str, data: dict) -> None:
         """
         Оповещает администраторов об обнаружении нетипичного поведения ресурсов.
-        Учитывает активный режим тишины для подавления дублирующих уведомлений.
+        Учитывает активный режим тишины и cooldown для подавления дублирующих
+        уведомлений, и для CPU-аномалий на postgres-ресурсах автоматически
+        прикладывает снимок pg_stat_activity/pg_stat_statements — чтобы не
+        гоняться за скачком руками через docker exec постфактум.
         """
         project = data.get("project", "unknown")
         resource = data.get("resource", "unknown")
@@ -264,8 +271,8 @@ class TelegramNotifier:
             )
             return
 
-        # 1.5. Cooldown/дедуп: не слать один и тот же алерт (project:resource:metric) чаще раза в 20 минут.
-        # set с NX+EX атомарно совмещает роль "уже отправляли" и таймера — если ключ уже есть, was_set=None.
+        # 1.5. Cooldown/дедуп: не слать один и тот же алерт (project:resource:metric)
+        # чаще раза в 20 минут. NX+EX атомарно совмещает роль "уже отправляли" и таймера.
         cooldown_key = f"nexus:anomaly_cooldown:{project}:{resource}:{metric}"
         was_set = await redis_client.set(cooldown_key, "1", ex=1200, nx=True)
         if not was_set:
@@ -288,6 +295,27 @@ class TelegramNotifier:
             f"<i>Рекомендуется проверить логи и статус контейнера.</i>"
         )
 
+        # 2.5. Автодиагностика: только для CPU-аномалий на ресурсах, похожих на postgres.
+        # "похожих" — по имени ключа ресурса (resource_key в манифесте), не по имени
+        # образа, чтобы не делать лишний docker inspect на каждый алерт без необходимости.
+        if metric == "cpu" and "postgres" in resource.lower():
+            try:
+                agent = registry.get(project)
+                container = agent.resources.get(resource)
+                if isinstance(container, DockerContainer):
+                    snapshot = await get_postgres_snapshot(container.container_name)
+                    if snapshot:
+                        snapshot_escaped = html.escape(snapshot)
+                        if len(snapshot_escaped) > 900:
+                            snapshot_escaped = snapshot_escaped[:900] + "…"
+                        text += f"\n\n🔍 <b>Автодиагностика:</b>\n<pre>{snapshot_escaped}</pre>"
+            except Exception as e:
+                # Диагностика — best-effort довесок к алерту, а не его условие.
+                # Любая ошибка здесь не должна помешать отправке самого алерта.
+                logger.warning(
+                    f"Notifier: postgres diagnostics failed for {project}:{resource}: {e}"
+                )
+
         # 3. Отправляем сообщение всем зарегистрированным администраторам
         for admin_id in self.admin_ids:
             try:
@@ -298,6 +326,7 @@ class TelegramNotifier:
                 logger.error(
                     f"Notifier: Failed to send anomaly alert to admin {admin_id}: {e}"
                 )
+
 
 
     async def on_incident_risk_detected(self, event_type: str, data: dict) -> None:
