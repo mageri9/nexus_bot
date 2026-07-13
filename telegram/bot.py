@@ -1,22 +1,30 @@
 from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.redis import RedisStorage
 from loguru import logger
 
 from config import settings
+from agents import build_registry
 from services import (
     event_bus,
     state_collector,
     pubsub_listener,
     log_collector,
+    redis_client,
 )
 from .handlers import router
+from .handlers_onboarding import router as onboarding_router
 from .notifier import TelegramNotifier
 
 
 async def start_bot():
     bot = Bot(token=settings.bot_token_str)
-    dp = Dispatcher()
+    # RedisStorage вместо дефолтного MemoryStorage — нужно для FSM-визарда
+    # /newproject (handlers_onboarding.py), чтобы состояние визарда переживало
+    # рестарт бота, а не терялось на середине шага.
+    dp = Dispatcher(storage=RedisStorage(redis=redis_client))
 
     dp.include_router(router)
+    dp.include_router(onboarding_router)
 
     # Настройка шины событий
     notifier = TelegramNotifier(bot=bot)
@@ -35,6 +43,12 @@ async def start_bot():
     # Подписываем нотификатор на DevOps события, пришедшие из Redis Pub/Sub
     event_bus.subscribe("devops:workflow_success", notifier.on_devops_workflow_success)
     event_bus.subscribe("devops:workflow_failure", notifier.on_devops_workflow_failure)
+
+    # Наполняем registry из БД (или сеем из старого manifest.py, если БД пустая)
+    # ДО старта коллекторов — иначе первый тик StateCollector/LogCollector
+    # отработает по пустому реестру.
+    logger.info("Building agent registry from persistent store...")
+    await build_registry()
 
     # --- ЗАПУСК ФОНОВЫХ СЛУЖБ ---
     state_collector.start()
