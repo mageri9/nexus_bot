@@ -441,7 +441,7 @@ class StateCollector:
 
         # Проверка CPU на аномалии
         if current_cpu is not None and len(cpu_history) >= 3:
-            is_anom, mean, std = check_anomaly(current_cpu, cpu_history)
+            is_anom, mean, std = check_anomaly(current_cpu, cpu_history, metric_key="cpu")
             if is_anom:
                 logger.warning(
                     f"Anomaly in CPU for {agent_name}:{res_name}: current={current_cpu}%, mean={mean:.2f}%, std={std:.2f}"
@@ -460,7 +460,7 @@ class StateCollector:
 
         # Проверка RAM на аномалии
         if current_mem is not None and len(mem_history) >= 3:
-            is_anom, mean, std = check_anomaly(current_mem, mem_history)
+            is_anom, mean, std = check_anomaly(current_mem, mem_history, metric_key="mem_perc")
             if is_anom:
                 logger.warning(
                     f"Anomaly in RAM for {agent_name}:{res_name}: current={current_mem}%, mean={mean:.2f}%, std={std:.2f}"
@@ -573,6 +573,21 @@ class LogCollector:
                                 agent_name, res_name, resource.container_name
                             )
                         )
+
+    def add_agent(self, agent) -> None:
+        """Запускает стриминг логов для ресурсов вновь зарегистрированного агента (без рестарта)."""
+        if not self._running:
+            # LogCollector ещё не стартовал (например, вызвано до старта приложения) —
+            # обычный start() подхватит агента сам, когда пройдёт по registry.list_agents().
+            return
+        for res_name, resource in agent.resources.items():
+            if isinstance(resource, DockerContainer):
+                task_key = f"{agent.name}:{res_name}"
+                if task_key not in self._tasks:
+                    self._tasks[task_key] = asyncio.create_task(
+                        self._stream_container_logs(agent.name, res_name, resource.container_name)
+                    )
+
 
     async def stop(self) -> None:
         """Грациозно останавливает все стримы логов"""
