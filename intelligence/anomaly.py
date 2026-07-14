@@ -65,6 +65,15 @@ def check_anomaly(
     variance = sum((x - mean) ** 2 for x in history) / (n - 1)
     raw_std = math.sqrt(variance)
 
+    # Сохраняем защиту из оригинала: если история абсолютно плоская (не просто
+    # "тихая", а буквально без единого колебания), у нас нет статистической
+    # базы, чтобы судить об аномалии — это может быть холодный старт метрики
+    # (например, первые тики после появления ресурса), а не реальный baseline.
+    # Не поднимаем тревогу вообще, даже если текущее значение сильно отличается —
+    # MIN_DELTA/пол-на-std ниже рассчитаны на "тихие, но не идеально плоские" ряды.
+    if raw_std < 1e-6:
+        return False, mean, raw_std
+
     effective_min_std = min_std if min_std is not None else DEFAULT_MIN_STD.get(metric_key, 0.5)
     effective_min_delta = min_delta if min_delta is not None else DEFAULT_MIN_DELTA.get(metric_key, 1.0)
 
@@ -74,8 +83,8 @@ def check_anomaly(
     if delta < effective_min_delta:
         return False, mean, raw_std
 
-    # 2. Пол на std: не даём знаменателю схлопнуться в ноль/почти-ноль и
-    #    превратить любое дрожание в z-score в десятки сигм.
+    # 2. Пол на std: не даём знаменателю схлопнуться в почти-ноль и превратить
+    #    небольшое, но ненулевое дрожание в z-score в десятки сигм.
     effective_std = max(raw_std, effective_min_std)
 
     z_score = delta / effective_std
