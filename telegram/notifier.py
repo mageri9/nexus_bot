@@ -85,9 +85,21 @@ class TelegramNotifier:
         try:
             cached_details = await query_service.get_agent_details(project)
             if cached_details.get("version") == 2:
-                res_details = cached_details.get("containers", {}).get(resource)
+                # Мягкое сопоставление алиасов 'app' <-> 'bot' для кэшированного стейта
+                resolved_res = resource
+                if resource not in cached_details.get("containers", {}):
+                    if resource == "app" and "bot" in cached_details.get(
+                        "containers", {}
+                    ):
+                        resolved_res = "bot"
+                    elif resource == "bot" and "app" in cached_details.get(
+                        "containers", {}
+                    ):
+                        resolved_res = "app"
+
+                res_details = cached_details.get("containers", {}).get(resolved_res)
                 if not res_details:
-                    res_details = cached_details.get("storage", {}).get(resource)
+                    res_details = cached_details.get("storage", {}).get(resolved_res)
 
                 if res_details:
                     metrics = res_details.get("metrics", {})

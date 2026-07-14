@@ -55,27 +55,39 @@ class QueryService:
     async def get_resource_logs(
         self, agent_name: str, resource_name: str, limit: int = 50
     ) -> str:
-        # 1. Попытка прочесть данные из кольцевого буфера в Redis
-        key = f"nexus:logs:{agent_name}:{resource_name}"
-        try:
-            buffered_lines = await self.redis.lrange(key, -limit, -1)
-            if buffered_lines:
-                return "\n".join(buffered_lines)
-        except Exception as e:
-            # Логируем ошибку, но не падаем — пробуем фолбек
-            from loguru import logger
-            logger.warning(f"QueryService: Failed to fetch logs from Redis buffer for {agent_name}:{resource_name}: {e}")
-
-        # 2. Фолбек на прямое чтение через Docker API транспорт, если буфер пуст
         agent = self.registry.get(agent_name)
-        resource = agent.resources.get(resource_name)
+
+        # Разрешаем алиасы 'app' <-> 'bot' для совместимости старых манифестов и SDK
+        resolved_name = resource_name
+        if resource_name not in agent.resources:
+            if resource_name == "app" and "bot" in agent.resources:
+                resolved_name = "bot"
+            elif resource_name == "bot" and "app" in agent.resources:
+                resolved_name = "app"
+
+        # 1. Попытка прочесть данные из кольцевого буфера в Redis (проверяем оба варианта)
+        for r_name in (resource_name, resolved_name):
+            key = f"nexus:logs:{agent_name}:{r_name}"
+            try:
+                buffered_lines = await self.redis.lrange(key, -limit, -1)
+                if buffered_lines:
+                    return "\n".join(buffered_lines)
+            except Exception as e:
+                from loguru import logger
+
+                logger.warning(
+                    f"QueryService: Failed to fetch logs from Redis buffer for {agent_name}:{r_name}: {e}"
+                )
+
+        # 2. Фолбек на прямое чтение через Docker API транспорт
+        resource = agent.resources.get(resolved_name)
         if not resource:
             raise KeyError(
-                f"Resource '{resource_name}' not found in agent '{agent_name}'."
+                f"Resource '{resource_name}' (resolved as '{resolved_name}') not found in agent '{agent_name}'."
             )
         if not hasattr(resource, "get_logs"):
             raise TypeError(
-                f"Resource '{resource_name}' in agent '{agent_name}' does not support log collection."
+                f"Resource '{resolved_name}' in agent '{agent_name}' does not support log collection."
             )
         return await resource.get_logs(limit=limit)
 

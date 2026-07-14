@@ -10,18 +10,27 @@ class CommandService:
 
     async def restart_resource(self, agent_name: str, resource_name: str) -> str:
         agent = self.registry.get(agent_name)
-        resource = agent.resources.get(resource_name)
+
+        # Разрешаем алиасы 'app' <-> 'bot' для совместимости старых манифестов и SDK
+        resolved_name = resource_name
+        if resource_name not in agent.resources:
+            if resource_name == "app" and "bot" in agent.resources:
+                resolved_name = "bot"
+            elif resource_name == "bot" and "app" in agent.resources:
+                resolved_name = "app"
+
+        resource = agent.resources.get(resolved_name)
 
         if not resource:
             raise KeyError(
-                f"Resource '{resource_name}' not found in agent '{agent_name}'."
+                f"Resource '{resource_name}' (resolved as '{resolved_name}') not found in agent '{agent_name}'."
             )
         if not hasattr(resource, "restart"):
             raise TypeError(
-                f"Resource '{resource_name}' in agent '{agent_name}' does not support restart."
+                f"Resource '{resolved_name}' in agent '{agent_name}' does not support restart."
             )
 
-        payload = {"agent": agent_name, "resource": resource_name, "action": "restart"}
+        payload = {"agent": agent_name, "resource": resolved_name, "action": "restart"}
 
         # 1. Публикуем событие о начале перезапуска
         await self.event_bus.publish("action:started", payload)
