@@ -17,6 +17,14 @@ DEFAULT_MIN_DELTA = {
     "ram": 5.0,
 }
 
+# Настройки минимальных абсолютных значений, ниже которых аномалии вообще не регистрируются.
+# Это позволяет полностью игнорировать скачки на низких уровнях нагрузки (например, рост CPU с 1% до 20%).
+ABS_SAFETY_FLOOR = {
+    "cpu": 35.0,       # Игнорировать аномалии CPU, если текущее потребление ниже 35%
+    "mem_perc": 40.0,  # Игнорировать аномалии RAM, если текущее потребление ниже 40%
+    "ram": 40.0,
+}
+
 
 def parse_float_metric(value: Any) -> float | None:
     """
@@ -44,7 +52,8 @@ def check_anomaly(
 ) -> Tuple[bool, float, float]:
     """
     Вычисляет Z-score для текущего значения на основе истории.
-    Определяет аномалии только при росте показателей (односторонний критерий).
+    Определяет аномалии только при росте показателей (односторонний критерий)
+    и только если превышен абсолютный порог безопасности (floor).
     """
     # Для расчета среднего и стандартного отклонения нужно хотя бы 3 точки в истории
     if not history or len(history) < 3:
@@ -60,7 +69,13 @@ def check_anomaly(
     if raw_std < 1e-6:
         return False, mean, raw_std
 
-    # Если ключ неизвестен (например, в тестах передано None), используем консервативные старые дефолты
+    # Проверка абсолютного пола безопасности. Если нагрузка находится в зеленой зоне,
+    # то скачок не считается аномалией, независимо от Z-score.
+    safety_floor = ABS_SAFETY_FLOOR.get(metric_key, 0.0) if metric_key else 0.0
+    if current < safety_floor:
+        return False, mean, raw_std
+
+    # Определение порогов на основе ключа метрики (с фолбеками под тесты, где metric_key = None)
     effective_min_std = min_std if min_std is not None else DEFAULT_MIN_STD.get(metric_key, 0.5)
     effective_min_delta = min_delta if min_delta is not None else DEFAULT_MIN_DELTA.get(metric_key, 1.0)
 
