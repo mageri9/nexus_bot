@@ -65,7 +65,7 @@ class QueryService:
             elif resource_name == "bot" and "app" in agent.resources:
                 resolved_name = "app"
 
-        # 1. Попытка прочесть данные из кольцевого буфера в Redis (проверяем оба варианта)
+        # 1. Попытка прочесть данные из кольцевого буфера в Redis
         for r_name in (resource_name, resolved_name):
             key = f"nexus:logs:{agent_name}:{r_name}"
             try:
@@ -85,10 +85,28 @@ class QueryService:
             raise KeyError(
                 f"Resource '{resource_name}' (resolved as '{resolved_name}') not found in agent '{agent_name}'."
             )
+
+        # --- ИСПРАВЛЕНИЕ БАГА: Авто-фолбек для виртуальных ресурсов ---
         if not hasattr(resource, "get_logs"):
+            # Если ресурс не поддерживает сбор логов (диск, heartbeat),
+            # ищем первый доступный контейнер в этом проекте, у которого логи есть
+            fallback_container = None
+            for r_key, r_obj in agent.resources.items():
+                if hasattr(r_obj, "get_logs"):
+                    fallback_container = r_key
+                    break
+
+            # Если нашли (например, bot или app), возвращаем его логи вместо ошибки
+            if fallback_container:
+                return await self.get_resource_logs(
+                    agent_name, fallback_container, limit
+                )
+
             raise TypeError(
                 f"Resource '{resolved_name}' in agent '{agent_name}' does not support log collection."
             )
+        # -------------------------------------------------------------
+
         return await resource.get_logs(limit=limit)
 
     def calculate_health_score(self, agent_name: str, state_details: dict) -> int:
