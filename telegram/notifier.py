@@ -264,9 +264,10 @@ class TelegramNotifier:
         """
         Оповещает администраторов об обнаружении нетипичного поведения ресурсов.
         Учитывает активный режим тишины и cooldown для подавления дублирующих
-        уведомлений, и для CPU-аномалий на postgres-ресурсах автоматически
-        прикладывает снимок pg_stat_activity/pg_stat_statements — чтобы не
-        гоняться за скачком руками через docker exec постфактум.
+        уведомлений, прикладывает последние 5 строк логов затронутого контейнера,
+        а для CPU-аномалий на postgres-ресурсах дополнительно снимок
+        pg_stat_activity/pg_stat_statements — чтобы не гоняться за скачком руками
+        через docker exec постфактум.
         """
         project = data.get("project", "unknown")
         resource = data.get("resource", "unknown")
@@ -293,6 +294,18 @@ class TelegramNotifier:
             )
             return
 
+        # 1.8. Подтягиваем последние 5 строк логов контейнера — best-effort,
+        # ошибка получения логов не должна блокировать сам алерт.
+        try:
+            raw_logs = await query_service.get_resource_logs(project, resource, limit=5)
+            logs_tail = "\n".join(raw_logs.strip().split("\n")[-5:])
+            logs_escaped = html.escape(logs_tail) if logs_tail else "Логи пусты."
+        except Exception as e:
+            logger.warning(
+                f"Notifier: failed to fetch logs for anomaly alert {project}:{resource}: {e}"
+            )
+            logs_escaped = "Не удалось получить логи."
+
         # 2. Форматируем сообщение
         metric_display = (
             "Процессор (CPU)" if metric == "cpu" else "Оперативная память (RAM)"
@@ -304,7 +317,8 @@ class TelegramNotifier:
             f"<b>Показатель:</b> {metric_display}\n\n"
             f"<b>Текущее значение:</b> 🔴 <code>{current_value}</code>\n"
             f"<b>Ожидаемое (среднее):</b> <code>{mean}</code> (нормальное отклонение: <code>{std}</code>)\n\n"
-            f"<i>Рекомендуется проверить логи и статус контейнера.</i>"
+            f"📝 <b>Последние логи:</b>\n"
+            f"<pre>{logs_escaped}</pre>"
         )
 
         # 2.5. Автодиагностика: только для CPU-аномалий на ресурсах, похожих на postgres.
