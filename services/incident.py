@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from redis.asyncio import Redis
 from loguru import logger
 
+from config.settings import settings
 from services.query import QueryService
 from core.signal import Signal
 
@@ -150,7 +151,9 @@ class IncidentService:
         incident_num = await self.redis.incr("nexus:incident:counter")
         incident_id = f"{incident_num}"
 
-        acquired = await self.redis.set(active_key, incident_id, nx=True)
+        acquired = await self.redis.set(
+            active_key, incident_id, nx=True, ex=settings.INCIDENT_LOCK_TTL_SECONDS
+        )
         if not acquired:
             logger.debug(f"Incident for {project}:{resource} is already open. Skipping.")
             return
@@ -227,10 +230,30 @@ class IncidentService:
         active_key = f"nexus:incident:active:{project}:{resource}"
         incident_id = await self.redis.get(active_key)
         if not incident_id:
-            logger.debug(f"IncidentService: No active incident found for {project}:{resource} to resolve.")
-            return
+            # The lock may have expired before the recovery event arrived.
+            # Locate the still-open incident so it can be closed normally.
+            incident_id = None
+            incident_ids = await self.redis.lrange("nexus:incidents:history", 0, -1)
+            for candidate_id in incident_ids:
+                raw_candidate = await self.redis.get(
+                    f"nexus:incident:detail:{candidate_id}"
+                )
+                if not raw_candidate:
+                    continue
+                candidate = Incident.model_validate_json(raw_candidate)
+                if (
+                    candidate.project == project
+                    and candidate.resource == resource
+                    and candidate.status == "open"
+                ):
+                    incident_id = candidate_id
+                    break
 
-        await self.redis.delete(active_key)
+            if not incident_id:
+                logger.debug(f"IncidentService: No active incident found for {project}:{resource} to resolve.")
+                return
+        else:
+            await self.redis.delete(active_key)
 
         detail_key = f"nexus:incident:detail:{incident_id}"
         raw_incident = await self.redis.get(detail_key)
@@ -319,7 +342,9 @@ class IncidentService:
         incident_num = await self.redis.incr("nexus:incident:counter")
         incident_id = f"{incident_num}"
 
-        acquired = await self.redis.set(active_key, incident_id, nx=True)
+        acquired = await self.redis.set(
+            active_key, incident_id, nx=True, ex=settings.INCIDENT_LOCK_TTL_SECONDS
+        )
         if not acquired:
             logger.debug(f"Incident for {project}:{resource} is already open. Skipping.")
             return

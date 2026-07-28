@@ -11,6 +11,9 @@ class Settings(BaseSettings):
 
     # Конфигурация StateCollector.
     COLLECTOR_DEBOUNCE_TICKS: int = 2
+
+    # Конфигурация IncidentService.
+    INCIDENT_LOCK_TTL_SECONDS: int = 3600
     APP_ERROR_AUTO_RECOVERY_THRESHOLD: int = 60
 
     # Конфигурация шлюза AITUNNEL

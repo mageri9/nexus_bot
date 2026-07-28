@@ -253,60 +253,19 @@ async def test_resource_metrics_error_is_captured_without_crashing_tick(
     assert recording_subscriber.types() == ["ResourceStarted"]
 
 
-# ---- баг, обнаруженный в процессе написания тестов ----
-
-
-async def test_custom_other_category_resource_transitions_are_never_tracked_KNOWN_BUG(
+async def test_custom_other_category_resource_transitions_are_tracked(
     registry, fake_redis, event_bus, recording_subscriber
 ):
-    """
-    ВНИМАНИЕ: этот тест фиксирует текущее (некорректное) поведение, а не
-    желаемое — аналогично тесту про TTL инцидентов в test_incident_service.py.
-
-    services/collector.py раскладывает ресурсы по трём категориям:
-    "containers" (DockerContainer), "storage" (HostDiskResource /
-    ProjectStorageResource) и "other" (любой другой Resource — сам
-    core/resource.py прямо предусматривает это как "Фолбек для кастомных
-    типов ресурсов в будущем").
-
-    Но при восстановлении old_resources_statuses в начале каждого тика
-    читаются только "containers" и "storage":
-
-        for res_name, res_data in old_state.get("containers", {}).items(): ...
-        for res_name, res_data in old_state.get("storage", {}).items(): ...
-
-    "other" не читается никогда. Следствие: для любого кастомного типа
-    ресурса old_status всегда None, поэтому коллектор на КАЖДОМ тике
-    считает его "впервые увиденным" — событие ResourceStarted /
-    ResourceUnhealthy будет публиковаться повторно каждые `interval` секунд,
-    даже если статус ресурса вообще не менялся. Реальные переходы
-    (ResourceStopped/ResourceRecovered/ResourceDeleted) для таких ресурсов
-    никогда не сработают.
-
-    Сейчас в agents/seed_from_manifest.py кастомные типы не используются, поэтому баг
-    спит. Но он "выстрелит" в момент, когда кто-то добавит новый класс
-    Resource помимо DockerContainer/HostDiskResource/ProjectStorageResource.
-
-    Если это когда-нибудь исправят (учтут "other" при восстановлении
-    old_resources_statuses), тест ниже должен начать падать на последнем
-    ассерте — тогда его нужно инвертировать.
-    """
     resource = FakeResource("running")
     registry.register(ProjectAgent(name="nexus", resources={"custom": resource}))
     collector = make_collector(registry, fake_redis, event_bus)
 
-    await run_one_collector_tick(collector)  # тик 1: должен быть "первое обнаружение"
+    await run_one_collector_tick(collector)
 
     subscribe_all(event_bus, recording_subscriber)
-    # Статус НЕ меняется между тиками
-    await run_one_collector_tick(
-        collector
-    )  # тик 2: ожидаемо - тишина, фактически - снова "первое обнаружение"
+    await run_one_collector_tick(collector)
 
-    assert recording_subscriber.types() == ["ResourceStarted"], (
-        "Если это упало - значит баг с потерей old_status для ресурсов из "
-        "категории 'other' починили. Обнови README и удали/инвертируй этот тест."
-    )
+    assert recording_subscriber.types() == []
 
 
 async def test_debounce_transition_requires_m_ticks(

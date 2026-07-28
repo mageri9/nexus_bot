@@ -145,6 +145,8 @@ class StateCollector:
                             old_resources_statuses[res_name] = res_data.get("status")
                         for res_name, res_data in old_state.get("storage", {}).items():
                             old_resources_statuses[res_name] = res_data.get("status")
+                        for res_name, res_data in old_state.get("other", {}).items():
+                            old_resources_statuses[res_name] = res_data.get("status")
                     else:
                         for res_name, res_data in old_state.items():
                             if isinstance(res_data, dict):

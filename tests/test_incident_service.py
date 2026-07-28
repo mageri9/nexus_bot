@@ -5,6 +5,7 @@ from infra.docker import DockerContainer
 from services.incident import IncidentService
 from services.query import QueryService
 from services.health_engine import HealthEngine
+from config.settings import settings
 
 
 @pytest.fixture
@@ -205,39 +206,43 @@ async def test_after_recovery_a_new_failure_opens_a_fresh_incident(
     assert ids == ["2", "1"]
 
 
-# ---- известная проблема, найденная при ревью кода ----
-
-
-async def test_active_incident_lock_has_no_ttl_KNOWN_BUG(incident_service, fake_redis):
-    """
-    ВНИМАНИЕ: этот тест фиксирует текущее (некорректное) поведение, а не
-    желаемое.
-
-    В коде `on_resource_failed` ставит блокировку через:
-        await self.redis.set(active_key, incident_id, nx=True)
-    без параметра `ex=...`. Комментарий в коде и README утверждают, что лок
-    ставится "с TTL 1 час", но фактически TTL не выставляется вовсе — ключ
-    живёт вечно, пока не будет явно удалён в `on_resource_recovered`.
-
-    Практическое следствие: если ресурс не пришлёт штатное событие
-    ResourceRecovered (например, был удалён из манифеста, а не восстановлен),
-    блокировка останется в Redis навсегда и заблокирует создание новых
-    инцидентов для ресурса с тем же именем.
-
-    Если это поведение когда-нибудь исправят (добавят `ex=3600`), этот тест
-    должен начать падать — тогда его нужно удалить или инвертировать вместе
-    с обновлением README/комментариев в коде.
-    """
+async def test_active_incident_lock_has_ttl(incident_service, fake_redis):
     await incident_service.on_resource_failed("ResourceStopped", failed_payload())
 
     active_key = "nexus:incident:active:nexus:app"
     ttl = await fake_redis.ttl(active_key)
 
-    # -1 в Redis означает "ключ существует, но TTL не установлен"
-    assert ttl == -1, (
-        "Похоже, TTL для блокировки инцидента теперь установлен - отлично! "
-        "Обнови README (раздел про SET NX) и удали/инвертируй этот тест."
+    assert 0 < ttl <= settings.INCIDENT_LOCK_TTL_SECONDS
+
+
+async def test_recovery_closes_incident_after_active_lock_expired(
+    incident_service, fake_redis
+):
+    await incident_service.on_resource_failed("ResourceStopped", failed_payload())
+    await fake_redis.delete("nexus:incident:active:nexus:app")
+
+    await incident_service.on_resource_recovered(
+        "ResourceRecovered", {"agent": "nexus", "resource": "app"}
     )
+
+    incident = await incident_service.get_incident("1")
+    assert incident.status == "resolved"
+
+
+async def test_app_error_active_incident_lock_has_ttl(incident_service, fake_redis):
+    await incident_service.on_app_error(
+        "app:error",
+        {
+            "project": "tarot_bot",
+            "exception_type": "KeyError",
+            "message": "missing key 'foo'",
+            "traceback": "",
+        },
+    )
+
+    ttl = await fake_redis.ttl("nexus:incident:active:tarot_bot:app")
+
+    assert 0 < ttl <= settings.INCIDENT_LOCK_TTL_SECONDS
 
 
 async def test_resource_deleted_event_does_not_release_incident_lock_KNOWN_BUG(
