@@ -10,6 +10,8 @@ from services.health_engine import HealthEngine
 from infra import DockerContainer, HostDiskResource, ProjectStorageResource
 from intelligence.models import MetricSnapshot
 from intelligence.predictor import IncidentPredictor
+from services.anomaly_evaluator import AnomalyEvaluator
+from services.auto_recovery import AppAutoRecoveryService
 
 
 class StateCollector:
@@ -31,6 +33,16 @@ class StateCollector:
         self._task: asyncio.Task | None = None
         self.health_engine = health_engine or HealthEngine()
         self.event_storage = event_storage
+        from config import settings
+
+        self.auto_recovery_service = AppAutoRecoveryService(
+            redis_client,
+            event_bus,
+            recovery_threshold_seconds=getattr(
+                settings, "APP_ERROR_AUTO_RECOVERY_THRESHOLD", 60
+            ),
+        )
+        self.anomaly_evaluator = AnomalyEvaluator(event_storage, event_bus)
         self._pending_transitions: dict[str, dict[str, tuple[str, int]]] = {}
 
         # Инициализируем и загружаем ИИ-предиктор рисков
@@ -64,66 +76,6 @@ class StateCollector:
         if agent_name in self._pending_transitions:
             self._pending_transitions[agent_name].pop(resource_name, None)
 
-
-    async def _check_app_auto_recovery(self) -> None:
-        """Проверяет открытые инциденты приложений и автоматически закрывает их при отсутствии новых ошибок"""
-        try:
-            # Сканируем активные инциденты приложений
-            async for key in self.redis.scan_iter("nexus:incident:active:*:app"):
-                parts = key.split(":")
-                if len(parts) < 5:
-                    continue
-                project = parts[3]
-
-                incident_id = await self.redis.get(key)
-                if not incident_id:
-                    continue
-
-                # Извлекаем подробности инцидента
-                detail_raw = await self.redis.get(
-                    f"nexus:incident:detail:{incident_id}"
-                )
-                if not detail_raw:
-                    continue
-
-                incident_data = json.loads(detail_raw)
-                fingerprint = incident_data.get("fingerprint")
-                if not fingerprint:
-                    continue
-
-                # Извлекаем время последнего проявления ошибки из реестра
-                err_data = await self.redis.hgetall(f"nexus:errors:{fingerprint}")
-                if not err_data:
-                    continue
-
-                last_seen_str = err_data.get("last_seen")
-                if not last_seen_str:
-                    continue
-
-                last_seen = datetime.fromisoformat(last_seen_str)
-                now = datetime.now(timezone.utc)
-                gap = (now - last_seen).total_seconds()
-
-                # Сравниваем с порогом из настроек
-                from config import settings
-
-                threshold = getattr(settings, "APP_ERROR_AUTO_RECOVERY_THRESHOLD", 60)
-                if gap > threshold:
-                    logger.info(
-                        f"Auto-Recovery: App exception '{fingerprint}' for '{project}' did not repeat for {gap:.1f}s. "
-                        f"Resolving incident #{incident_id}."
-                    )
-                    # Помечаем ошибку как решенную в реестре
-                    await self.redis.hset(
-                        f"nexus:errors:{fingerprint}", "resolved", "1"
-                    )
-
-                    # Публикуем стандартное событие восстановления
-                    await self.event_bus.publish(
-                        "ResourceRecovered", {"agent": project, "resource": "app"}
-                    )
-        except Exception as e:
-            logger.error(f"Error during app auto-recovery execution: {e}")
 
     async def _loop(self) -> None:
         while True:
@@ -173,7 +125,9 @@ class StateCollector:
                         # Выявление аномалий для контейнеров перед сохранением нового снимка
                         if hasattr(resource, "container_name"):
                             try:
-                                await self._check_and_publish_anomalies(agent_name, res_name, metrics)
+                                await self.anomaly_evaluator.evaluate_container_metrics(
+                                    agent_name, res_name, metrics
+                                )
                             except Exception as ex:
                                 logger.error(f"Collector anomaly detection failed for {agent_name}:{res_name}: {ex}")
 
@@ -338,7 +292,7 @@ class StateCollector:
                         await self.redis.zremrangebyrank(history_key, 0, -101)
 
                     # В конце каждого тика запускаем проверку затухания повторов исключений приложений
-                await self._check_app_auto_recovery()
+                await self.auto_recovery_service.check_and_recover()
 
             except Exception as e:
                 logger.error(f"Collector loop error: {e}")
@@ -399,77 +353,6 @@ class StateCollector:
             )
             await self.event_storage.save_metric_snapshot(snapshot)
 
-
-    async def _check_and_publish_anomalies(
-        self, agent_name: str, res_name: str, metrics: dict
-    ) -> None:
-        if not self.event_storage:
-            return
-
-        # Запрашиваем историю последних снимков для этого ресурса
-        snapshots = await self.event_storage.query_metric_snapshots(
-            agent_name, res_name, limit=120
-        )
-        if not snapshots:
-            return
-
-        from intelligence.anomaly import check_anomaly
-
-        # Извлекаем историю числовых показателей нагрузки
-        cpu_history = []
-        mem_history = []
-        for snap in snapshots:
-            cpu_val = extract_metric_value(snap.cpu)
-            if cpu_val is not None:
-                cpu_history.append(cpu_val)
-            mem_val = extract_metric_value(snap.mem_perc)
-            if mem_val is not None:
-                mem_history.append(mem_val)
-
-        # Парсим текущие значения показателей
-        current_cpu = None
-        current_mem = None
-        if isinstance(metrics, dict):
-            current_cpu = extract_metric_value(metrics.get("cpu"))
-            current_mem = extract_metric_value(metrics.get("mem_perc"))
-
-        # Проверка CPU на аномалии
-        if current_cpu is not None and len(cpu_history) >= 3:
-            is_anom, mean, std = check_anomaly(current_cpu, cpu_history, metric_key="cpu")
-            if is_anom:
-                logger.warning(
-                    f"Anomaly in CPU for {agent_name}:{res_name}: current={current_cpu}%, mean={mean:.2f}%, std={std:.2f}"
-                )
-                await self.event_bus.publish(
-                    "ml:anomaly_detected",
-                    {
-                        "project": agent_name,
-                        "resource": res_name,
-                        "metric": "cpu",
-                        "current_value": f"{current_cpu}%",
-                        "mean": f"{mean:.2f}%",
-                        "std": f"{std:.2f}",
-                    },
-                )
-
-        # Проверка RAM на аномалии
-        if current_mem is not None and len(mem_history) >= 3:
-            is_anom, mean, std = check_anomaly(current_mem, mem_history, metric_key="mem_perc")
-            if is_anom:
-                logger.warning(
-                    f"Anomaly in RAM for {agent_name}:{res_name}: current={current_mem}%, mean={mean:.2f}%, std={std:.2f}"
-                )
-                await self.event_bus.publish(
-                    "ml:anomaly_detected",
-                    {
-                        "project": agent_name,
-                        "resource": res_name,
-                        "metric": "mem_perc",
-                        "current_value": f"{current_mem}%",
-                        "mean": f"{mean:.2f}%",
-                        "std": f"{std:.2f}",
-                    },
-                )
 
     async def _run_ml_predictions_for_agent(
         self, state_v2: dict, agent_health_score: int

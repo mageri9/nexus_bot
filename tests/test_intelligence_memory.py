@@ -311,7 +311,7 @@ async def test_collector_detects_and_publishes_anomaly(temp_db_path, fake_redis,
             "source": "docker_stats"
         }
     }
-    await collector._check_and_publish_anomalies("nexus", "app", metrics)
+    await collector.anomaly_evaluator.evaluate_container_metrics("nexus", "app", metrics)
 
     # 5. Проверяем, что событие аномалии было успешно опубликовано в EventBus
     assert len(published_anomalies) == 1

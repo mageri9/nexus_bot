@@ -467,7 +467,7 @@ async def test_app_error_auto_recovery_resolves_stale_incident(
     )
 
     # Запускаем проверку авто-восстановления
-    await collector._check_app_auto_recovery()
+    await collector.auto_recovery_service.check_and_recover()
 
     # Проверяем, что событие восстановления для tarot_bot успешно сгенерировано
     assert recording_subscriber.types() == ["ResourceRecovered"]
