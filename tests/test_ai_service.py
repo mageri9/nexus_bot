@@ -11,12 +11,7 @@ from services import incident_service
 async def test_diagnose_incident_builds_contextual_bundle_and_calls_api(
     fake_redis, event_bus
 ):
-    from services.query import QueryService
-    from services.health_engine import HealthEngine
-    from core import AgentRegistry
-
-    qs = QueryService(AgentRegistry(), fake_redis, HealthEngine())
-    ai_service = AIService(qs, event_bus, fake_redis)
+    ai_service = AIService(event_bus, fake_redis)
 
     # Имитируем инцидент со связанным фингерпринтом
     mock_incident = Incident(

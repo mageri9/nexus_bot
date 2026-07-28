@@ -1,12 +1,15 @@
 import hmac
 import hashlib
 import json
+import logging
 import traceback
 import httpx
 import asyncio
 from datetime import datetime, timezone
 from aiogram import Dispatcher
 from aiogram.types import ErrorEvent
+
+logger = logging.getLogger("nexus_sdk")
 
 
 class NexusSDK:
@@ -65,9 +68,9 @@ class NexusSDK:
                 self.endpoint_url, content=body_bytes, headers=headers
             )
             if resp.status_code != 200:
-                print(f"[NexusSDK] Failed to send error report: {resp.status_code} {resp.text}")
-        except Exception as e:
-            print(f"[NexusSDK] Connection error to Nexus: {e}")
+                logger.error("Failed to send error report: %s %s", resp.status_code, resp.text)
+        except Exception:
+            logger.exception("Connection error to Nexus")
 
     def start_heartbeat(self, interval_seconds: int = 15) -> asyncio.Task:
         """Запускает фоновую задачу периодической отправки Heartbeat в Nexus"""
@@ -95,11 +98,11 @@ class NexusSDK:
                     self.endpoint_url, content=body_bytes, headers=headers
                 )
                 if resp.status_code != 200:
-                    print(
-                        f"[NexusSDK] Heartbeat failed: {resp.status_code} {resp.text}"
+                    logger.warning(
+                        "Heartbeat failed: %s %s", resp.status_code, resp.text
                     )
-            except Exception as e:
-                print(f"[NexusSDK] Heartbeat connection error: {e}")
+            except Exception:
+                logger.warning("Heartbeat connection error to Nexus", exc_info=True)
 
             await asyncio.sleep(interval)
 

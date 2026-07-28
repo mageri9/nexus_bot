@@ -49,7 +49,6 @@ event_bus.subscribe("ResourceRecovered", incident_service.on_resource_recovered)
 event_bus.subscribe("app:error", incident_service.on_app_error)
 
 ai_service = AIService(
-    query_service=query_service,
     event_bus=event_bus,
     redis_client=redis_client
 )

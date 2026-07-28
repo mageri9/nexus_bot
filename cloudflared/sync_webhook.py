@@ -1,9 +1,12 @@
+import logging
 import os
 import re
 import subprocess
 import sys
-import time
 import requests
+
+logger = logging.getLogger("sync_webhook")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
 GITHUB_REPO = os.environ["GITHUB_REPO"]
@@ -54,9 +57,9 @@ def upsert_webhook(new_base_url: str) -> None:
         )
 
     if resp.status_code >= 300:
-        print(f"[sync_webhook] Failed to update webhook: {resp.status_code} {resp.text}", flush=True)
+        logger.error("Failed to update webhook: %s %s", resp.status_code, resp.text)
     else:
-        print(f"[sync_webhook] Webhook synced to {full_url}", flush=True)
+        logger.info("Webhook synced to %s", full_url)
 
 
 def main():
@@ -79,7 +82,7 @@ def main():
                 try:
                     upsert_webhook(match.group(0))
                 except Exception as e:
-                    print(f"[sync_webhook] Error syncing webhook: {e}", flush=True)
+                    logger.error("Error syncing webhook: %s", e)
 
     proc.wait()
     sys.exit(proc.returncode)
