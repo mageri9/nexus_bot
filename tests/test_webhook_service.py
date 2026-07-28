@@ -58,6 +58,12 @@ def workflow_run_payload(status="completed", conclusion="success"):
 # ---- verify_signature() unit tests ----
 
 
+def test_verify_hmac_accepts_valid_signature(webhook_module):
+    body = b'{"a": 1}'
+    assert webhook_module.verify_hmac(body, sign(SECRET, body), SECRET) is True
+    assert webhook_module.verify_hmac(body, sign(SECRET, body), "") is False
+
+
 def test_verify_signature_accepts_valid_signature(webhook_module):
     body = b'{"a": 1}'
     header = sign(SECRET, body)

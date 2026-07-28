@@ -12,12 +12,7 @@ class CommandService:
         agent = self.registry.get(agent_name)
 
         # Разрешаем алиасы 'app' <-> 'bot' для совместимости старых манифестов и SDK
-        resolved_name = resource_name
-        if resource_name not in agent.resources:
-            if resource_name == "app" and "bot" in agent.resources:
-                resolved_name = "bot"
-            elif resource_name == "bot" and "app" in agent.resources:
-                resolved_name = "app"
+        resolved_name = agent.resolve_resource_name(resource_name)
 
         resource = agent.resources.get(resolved_name)
 

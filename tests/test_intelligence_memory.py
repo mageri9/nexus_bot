@@ -9,6 +9,7 @@ from intelligence.models import EventRecord
 from intelligence.storage import SqliteEventStorage
 from intelligence.collector import IntelligenceCollector
 from intelligence.anomaly import check_anomaly, parse_float_metric
+from core.telemetry import extract_metric_value
 
 
 @pytest.fixture
@@ -223,6 +224,12 @@ def test_parse_float_metric():
     assert parse_float_metric(55) == 55.0
     assert parse_float_metric(None) is None
     assert parse_float_metric("invalid") is None
+
+
+def test_extract_metric_value_supports_metric_dicts():
+    assert extract_metric_value({"value": "12.34%"}) == 12.34
+    assert extract_metric_value({"value": 55}) == 55.0
+    assert extract_metric_value({"missing": "value"}) is None
 
 
 def test_check_anomaly_math():

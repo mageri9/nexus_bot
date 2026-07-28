@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from loguru import logger
 from redis.asyncio import Redis
 from core import AgentRegistry
+from core.telemetry import extract_metric_value
 from services.event_bus import EventBus
 from services.health_engine import HealthEngine
 from infra import DockerContainer, HostDiskResource, ProjectStorageResource
@@ -363,13 +364,10 @@ class StateCollector:
 
             cpu, mem_perc, restarts = None, None, None
             if isinstance(metrics, dict):
-                cpu_data = metrics.get("cpu")
-                if isinstance(cpu_data, dict):
-                    cpu = cpu_data.get("value")
-
-                mem_data = metrics.get("mem_perc")
-                if isinstance(mem_data, dict):
-                    mem_perc = mem_data.get("value")
+                cpu_value = extract_metric_value(metrics.get("cpu"))
+                mem_value = extract_metric_value(metrics.get("mem_perc"))
+                cpu = f"{cpu_value}%" if cpu_value is not None else None
+                mem_perc = f"{mem_value}%" if mem_value is not None else None
 
                 restart_data = metrics.get("restarts")
                 if isinstance(restart_data, dict):
@@ -417,29 +415,25 @@ class StateCollector:
         if not snapshots:
             return
 
-        from intelligence.anomaly import check_anomaly, parse_float_metric
+        from intelligence.anomaly import check_anomaly
 
         # Извлекаем историю числовых показателей нагрузки
         cpu_history = []
         mem_history = []
         for snap in snapshots:
-            cpu_val = parse_float_metric(snap.cpu)
+            cpu_val = extract_metric_value(snap.cpu)
             if cpu_val is not None:
                 cpu_history.append(cpu_val)
-            mem_val = parse_float_metric(snap.mem_perc)
+            mem_val = extract_metric_value(snap.mem_perc)
             if mem_val is not None:
                 mem_history.append(mem_val)
 
         # Парсим текущие значения показателей
-        current_cpu, current_mem = None, None
+        current_cpu = None
+        current_mem = None
         if isinstance(metrics, dict):
-            cpu_data = metrics.get("cpu")
-            if isinstance(cpu_data, dict):
-                current_cpu = parse_float_metric(cpu_data.get("value"))
-
-            mem_data = metrics.get("mem_perc")
-            if isinstance(mem_data, dict):
-                current_mem = parse_float_metric(mem_data.get("value"))
+            current_cpu = extract_metric_value(metrics.get("cpu"))
+            current_mem = extract_metric_value(metrics.get("mem_perc"))
 
         # Проверка CPU на аномалии
         if current_cpu is not None and len(cpu_history) >= 3:
@@ -486,7 +480,6 @@ class StateCollector:
             return
 
         from config import settings
-        from intelligence.anomaly import parse_float_metric
 
         agent_name = state_v2.get("agent_name", "unknown")
 
@@ -498,10 +491,8 @@ class StateCollector:
             mem_perc = 0.0
             restarts = 0
             if isinstance(metrics, dict):
-                cpu = parse_float_metric(metrics.get("cpu", {}).get("value")) or 0.0
-                mem_perc = (
-                    parse_float_metric(metrics.get("mem_perc", {}).get("value")) or 0.0
-                )
+                cpu = extract_metric_value(metrics.get("cpu")) or 0.0
+                mem_perc = extract_metric_value(metrics.get("mem_perc")) or 0.0
                 try:
                     restarts = int(metrics.get("restarts", {}).get("value", 0))
                 except (ValueError, TypeError):

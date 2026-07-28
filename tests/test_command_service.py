@@ -12,6 +12,15 @@ def agent_with_container(scripted_transport):
     return agent, container
 
 
+def test_project_agent_resolves_app_bot_aliases(scripted_transport):
+    container = DockerContainer("bot", scripted_transport, "nexus-core")
+    agent = ProjectAgent(name="nexus", resources={"bot": container})
+
+    assert agent.resolve_resource_name("app") == "bot"
+    assert ProjectAgent.resolve_resource_alias("bot", {"app": container}) == "app"
+    assert agent.resolve_resource_name("missing") == "missing"
+
+
 async def test_restart_resource_success_publishes_started_then_success(
     registry, event_bus, scripted_transport, agent_with_container, recording_subscriber
 ):

@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any
+from core.telemetry import extract_metric_value
 
 
 class HealthRule(ABC):
@@ -31,19 +32,9 @@ class CpuRule(HealthRule):
         cpu_metric = metrics.get("cpu", {})
 
         # Поддержка структуры Metric V2 или сырого значения
-        cpu_val_raw = (
-            cpu_metric.get("value", "0.00%")
-            if isinstance(cpu_metric, dict)
-            else cpu_metric
-        )
-
-        if isinstance(cpu_val_raw, str):
-            try:
-                cpu_val = float(cpu_val_raw.replace("%", "").strip())
-                if cpu_val > 95.0:
-                    return 15
-            except ValueError:
-                pass
+        cpu_val = extract_metric_value(cpu_metric)
+        if cpu_val is not None and cpu_val > 95.0:
+            return 15
         return 0
 
 
@@ -55,19 +46,9 @@ class MemRule(HealthRule):
         mem_metric = metrics.get("mem_perc", {})
 
         # Поддержка структуры Metric V2 или сырого значения
-        mem_val_raw = (
-            mem_metric.get("value", "0.00%")
-            if isinstance(mem_metric, dict)
-            else mem_metric
-        )
-
-        if isinstance(mem_val_raw, str):
-            try:
-                mem_val = float(mem_val_raw.replace("%", "").strip())
-                if mem_val > 90.0:
-                    return 15
-            except ValueError:
-                pass
+        mem_val = extract_metric_value(mem_metric)
+        if mem_val is not None and mem_val > 90.0:
+            return 15
         return 0
 
 

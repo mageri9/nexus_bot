@@ -1,5 +1,6 @@
 import math
 from typing import List, Any, Tuple, Optional
+from core.telemetry import extract_metric_value
 
 # Минимальный "пол" для std, чтобы z-score не взрывался на почти неподвижных метриках.
 # Увеличили значения для CPU и RAM, чтобы снизить чувствительность к микро-колебаниям.
@@ -27,19 +28,8 @@ ABS_SAFETY_FLOOR = {
 
 
 def parse_float_metric(value: Any) -> float | None:
-    """
-    Безопасно преобразует строку процента (например, "12.34%") или число во float.
-    """
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value.replace("%", "").strip())
-        except (ValueError, TypeError):
-            return None
-    return None
+    """Backward-compatible wrapper for shared metric parsing."""
+    return extract_metric_value(value)
 
 
 def check_anomaly(

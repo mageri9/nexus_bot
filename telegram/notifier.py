@@ -6,6 +6,8 @@ from aiogram.filters.callback_data import CallbackData
 from loguru import logger
 
 from config import settings
+from core import ProjectAgent
+from core.telemetry import extract_metric_value
 from services import query_service, redis_client, ai_service, incident_service
 from services.diagnostics import get_postgres_snapshot
 from agents import registry
@@ -85,36 +87,28 @@ class TelegramNotifier:
         try:
             cached_details = await query_service.get_agent_details(project)
             if cached_details.get("version") == 2:
-                # Мягкое сопоставление алиасов 'app' <-> 'bot' для кэшированного стейта
-                resolved_res = resource
-                if resource not in cached_details.get("containers", {}):
-                    if resource == "app" and "bot" in cached_details.get(
-                        "containers", {}
-                    ):
-                        resolved_res = "bot"
-                    elif resource == "bot" and "app" in cached_details.get(
-                        "containers", {}
-                    ):
-                        resolved_res = "app"
+                containers = cached_details.get("containers", {})
+                resolved_res = ProjectAgent.resolve_resource_alias(resource, containers)
 
-                res_details = cached_details.get("containers", {}).get(resolved_res)
+                res_details = containers.get(resolved_res)
                 if not res_details:
                     res_details = cached_details.get("storage", {}).get(resolved_res)
 
                 if res_details:
                     metrics = res_details.get("metrics", {})
                     cpu_metric = metrics.get("cpu", {})
-                    cpu = (
-                        cpu_metric.get("value", "N/A")
-                        if isinstance(cpu_metric, dict)
-                        else cpu_metric
-                    )
+                    cpu_value = extract_metric_value(cpu_metric)
                     ram_metric = metrics.get("memory", {})
-                    ram = (
-                        ram_metric.get("value", "N/A")
-                        if isinstance(ram_metric, dict)
-                        else ram_metric
-                    )
+                    ram_value = extract_metric_value(ram_metric)
+                    cpu = "N/A" if cpu_value is None else f"{cpu_value}%"
+                    if ram_value is None:
+                        ram = (
+                            ram_metric.get("value", "N/A")
+                            if isinstance(ram_metric, dict)
+                            else ram_metric
+                        )
+                    else:
+                        ram = f"{ram_value}%"
         except Exception as e:
             logger.debug(
                 f"Notifier: Failed to fetch real-time metrics for incident alert: {e}"
