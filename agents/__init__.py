@@ -1,13 +1,12 @@
 """
 agents/__init__.py
 
-Раньше: registry собирался статичным импортом объектов из manifest.py при старте
+Раньше: registry собирался статичным импортом объектов из устаревшего манифеста при старте
 процесса — добавление проекта требовало правки файла и рестарта Nexus.
 
-Теперь: registry строится динамически из agents/store.py (SQLite). manifest.py
-используется только один раз, как seed — если БД пустая (первый запуск после
-миграции), туда заливается текущий набор из manifest.py, дальше manifest.py
-не читается вообще. Новые проекты добавляются через services/onboarding.py
+Теперь: registry строится динамически из agents/store.py (SQLite). Если БД пустая
+(первый запуск после миграции), она заполняется начальными данными из
+agents/seed_from_manifest.py. Новые проекты добавляются через services/onboarding.py
 в рантайме, без рестарта (registry.register() работает "живьём" — collector
 берёт список агентов на каждом тике, не кеширует).
 
@@ -45,7 +44,7 @@ async def build_registry() -> AgentRegistry:
 
 
 async def _seed_from_manifest() -> None:
-    """Одноразовая миграция текущего manifest.py в БД. Срабатывает только если БД пустая."""
+    """Одноразовая загрузка seed-данных в БД. Срабатывает только если БД пустая."""
     from agents.seed_from_manifest import SEED_AGENTS  # см. отдельный файл ниже
 
     for agent_name, resources in SEED_AGENTS.items():

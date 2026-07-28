@@ -283,7 +283,7 @@ async def test_custom_other_category_resource_transitions_are_never_tracked_KNOW
     (ResourceStopped/ResourceRecovered/ResourceDeleted) для таких ресурсов
     никогда не сработают.
 
-    Сейчас в agents/manifest.py кастомные типы не используются, поэтому баг
+    Сейчас в agents/seed_from_manifest.py кастомные типы не используются, поэтому баг
     спит. Но он "выстрелит" в момент, когда кто-то добавит новый класс
     Resource помимо DockerContainer/HostDiskResource/ProjectStorageResource.
 

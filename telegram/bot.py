@@ -44,7 +44,7 @@ async def start_bot():
     event_bus.subscribe("devops:workflow_success", notifier.on_devops_workflow_success)
     event_bus.subscribe("devops:workflow_failure", notifier.on_devops_workflow_failure)
 
-    # Наполняем registry из БД (или сеем из старого manifest.py, если БД пустая)
+    # Наполняем registry из БД (или seed-данными, если БД пустая)
     # ДО старта коллекторов — иначе первый тик StateCollector/LogCollector
     # отработает по пустому реестру.
     logger.info("Building agent registry from persistent store...")

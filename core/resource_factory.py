@@ -26,7 +26,7 @@ def _build_host_disk(key: str, cfg: Dict[str, Any], transport: Transport) -> Res
 
 
 def _build_heartbeat(key: str, cfg: Dict[str, Any], transport: Transport) -> Resource:
-    # ApplicationHeartbeat не принимает transport в конструкторе манифеста (см. manifest.py) —
+    # ApplicationHeartbeat не принимает transport в seed-данных (см. agents/seed_from_manifest.py) —
     # transport здесь игнорируется, оставлен в сигнатуре только чтобы фабрика была единообразной.
     return ApplicationHeartbeat(key, cfg["project"], max_gap_seconds=cfg.get("max_gap_seconds", 30))
 

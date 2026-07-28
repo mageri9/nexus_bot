@@ -142,6 +142,3 @@ class QueryService:
             return " ➡️"
         except Exception:
             return ""
-
-    def calculate_health_score(self, agent_name: str, state_details: dict) -> int:
-        return self.health_engine.calculate_score(state_details)
