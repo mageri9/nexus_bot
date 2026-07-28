@@ -14,12 +14,12 @@ docker exec + psql каждый раз.
 """
 from typing import Optional, Dict
 from loguru import logger
-from agents import local_transport
+from transports.base import Transport
 
 
-async def _get_postgres_env(container_name: str) -> Optional[Dict[str, str]]:
+async def _get_postgres_env(transport: Transport, container_name: str) -> Optional[Dict[str, str]]:
     try:
-        raw = await local_transport.run(["docker", "exec", container_name, "env"])
+        raw = await transport.run(["docker", "exec", container_name, "env"])
     except Exception as e:
         logger.warning(f"Diagnostics: failed to read env for {container_name}: {e}")
         return None
@@ -37,10 +37,12 @@ async def _get_postgres_env(container_name: str) -> Optional[Dict[str, str]]:
     return {"user": user, "db": db}
 
 
-async def _run_psql(container_name: str, user: str, db: str, query: str) -> Optional[str]:
+async def _run_psql(
+    transport: Transport, container_name: str, user: str, db: str, query: str
+) -> Optional[str]:
     try:
         # -t убирает шапку колонок, -A убирает выравнивание — компактнее для телеграма
-        return await local_transport.run(
+        return await transport.run(
             ["docker", "exec", container_name, "psql", "-U", user, "-d", db, "-t", "-A", "-c", query]
         )
     except Exception as e:
@@ -48,20 +50,20 @@ async def _run_psql(container_name: str, user: str, db: str, query: str) -> Opti
         return None
 
 
-async def get_postgres_snapshot(container_name: str) -> Optional[str]:
+async def get_postgres_snapshot(transport: Transport, container_name: str) -> Optional[str]:
     """
     Компактный текстовый снимок состояния postgres в момент вызова.
     Возвращает None, если не удалось снять ничего полезного вообще
     (нет доступа/креды не нашлись) — тогда notifier просто не покажет блок.
     """
-    creds = await _get_postgres_env(container_name)
+    creds = await _get_postgres_env(transport, container_name)
     if not creds:
         return None
 
     blocks = []
 
     active = await _run_psql(
-        container_name, creds["user"], creds["db"],
+        transport, container_name, creds["user"], creds["db"],
         "SELECT state || ' | ' || (now()-query_start)::text || ' | ' || left(query,70) "
         "FROM pg_stat_activity WHERE state != 'idle' AND pid != pg_backend_pid() "
         "ORDER BY query_start ASC LIMIT 5;",
@@ -72,7 +74,7 @@ async def get_postgres_snapshot(container_name: str) -> Optional[str]:
         blocks.append("Активных запросов в момент снимка нет — скачок короче интервала опроса.")
 
     top_calls = await _run_psql(
-        container_name, creds["user"], creds["db"],
+        transport, container_name, creds["user"], creds["db"],
         "SELECT calls || ' calls, avg ' || round(mean_exec_time::numeric,1) || 'ms | ' || left(query,70) "
         "FROM pg_stat_statements ORDER BY calls DESC LIMIT 5;",
     )

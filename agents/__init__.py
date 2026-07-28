@@ -29,12 +29,15 @@ async def build_registry() -> AgentRegistry:
     if await agent_store.is_empty():
         await _seed_from_manifest()
 
+    # The composition root owns the Redis dependency for heartbeat resources.
+    from services import redis_client
+
     agents_data = await agent_store.load_all()
     for agent_name, resource_rows in agents_data.items():
         resources = {}
         for row in resource_rows:
             resources[row["resource_key"]] = build_resource(
-                row["resource_type"], row["resource_key"], row["config"], local_transport
+                row["resource_type"], row["resource_key"], row["config"], local_transport, redis_client
             )
         from core.agent import ProjectAgent
 

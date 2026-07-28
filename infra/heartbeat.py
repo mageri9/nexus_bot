@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from redis.asyncio import Redis
 from core.resource import Resource
 from core.telemetry import Metric
 
@@ -7,16 +8,26 @@ from core.telemetry import Metric
 class ApplicationHeartbeat(Resource):
     """Мониторинг работоспособности приложения на основе регулярных Heartbeat-сигналов"""
 
-    def __init__(self, name: str, project_name: str, max_gap_seconds: int = 30):
+    def __init__(
+        self,
+        name: str,
+        project_name: str,
+        max_gap_seconds: int = 30,
+        redis_client: Optional[Redis] = None,
+    ):
         # Ресурс пульса виртуальный, транспорт ему не требуется
         super().__init__(name, transport=None)
         self.project_name = project_name
         self.max_gap_seconds = max_gap_seconds
+        self.redis_client = redis_client
         self.capabilities = []
 
     async def get_status(self) -> str:
         # Импортируем лениво, исключая циклическую зависимость при сборке манифеста
-        from services import redis_client
+        redis_client = self.redis_client
+        if redis_client is None:
+            # Compatibility for resources constructed before Redis injection.
+            from services import redis_client
 
         key = f"nexus:heartbeat:{self.project_name}"
         ts_raw = await redis_client.get(key)
@@ -35,7 +46,10 @@ class ApplicationHeartbeat(Resource):
             return "unhealthy"
 
     async def get_metrics(self) -> Dict[str, Any]:
-        from services import redis_client
+        redis_client = self.redis_client
+        if redis_client is None:
+            # Compatibility for resources constructed before Redis injection.
+            from services import redis_client
 
         key = f"nexus:heartbeat:{self.project_name}"
         ts_raw = await redis_client.get(key)

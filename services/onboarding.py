@@ -11,7 +11,7 @@ from loguru import logger
 from agents import store as agent_store, local_transport, registry
 from core.agent import ProjectAgent
 from core.resource_factory import build_resource
-from services import log_collector  # уже существующий инстанс из services/__init__.py
+from services import log_collector, redis_client  # уже существующий инстанс из services/__init__.py
 
 
 async def discover_containers(project_name_hint: str) -> List[str]:
@@ -129,7 +129,9 @@ async def commit_new_project(project_name: str, resource_rows: List[Dict[str, An
     await agent_store.save_agent(project_name, resource_rows)
 
     resources = {
-        row["resource_key"]: build_resource(row["resource_type"], row["resource_key"], row["config"], local_transport)
+        row["resource_key"]: build_resource(
+            row["resource_type"], row["resource_key"], row["config"], local_transport, redis_client
+        )
         for row in resource_rows
     }
     agent = ProjectAgent(name=project_name, resources=resources)

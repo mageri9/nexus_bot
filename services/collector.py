@@ -8,6 +8,8 @@ from core.telemetry import extract_metric_value
 from services.event_bus import EventBus
 from services.health_engine import HealthEngine
 from infra import DockerContainer, HostDiskResource, ProjectStorageResource
+from intelligence.models import MetricSnapshot
+from intelligence.predictor import IncidentPredictor
 
 
 class StateCollector:
@@ -32,8 +34,6 @@ class StateCollector:
         self._pending_transitions: dict[str, dict[str, tuple[str, int]]] = {}
 
         # Инициализируем и загружаем ИИ-предиктор рисков
-        from intelligence.predictor import IncidentPredictor
-
         self.predictor = IncidentPredictor()
         self.predictor.load_latest_model()
 
@@ -346,8 +346,6 @@ class StateCollector:
             await asyncio.sleep(self.interval)
 
     async def _save_snapshots_for_agent(self, state_v2: dict) -> None:
-        from intelligence.models import MetricSnapshot
-
         agent_name = state_v2.get("agent_name", "unknown")
         ts_str = state_v2.get("timestamp")
         try:

@@ -1,6 +1,8 @@
 import pytest
 from datetime import datetime, timedelta, timezone
 from infra.heartbeat import ApplicationHeartbeat
+from core.resource_factory import build_resource
+from transports import LocalShellTransport
 
 
 async def test_heartbeat_resource_unhealthy_by_default(fake_redis):
@@ -46,3 +48,15 @@ async def test_heartbeat_resource_unhealthy_when_timestamp_stale(fake_redis):
     assert await r.get_status() == "unhealthy"
     metrics = await r.get_metrics()
     assert 14.0 <= metrics["heartbeat_gap"]["value"] <= 16.0
+
+
+async def test_heartbeat_factory_injects_redis_client(fake_redis):
+    heartbeat = build_resource(
+        "heartbeat",
+        "heartbeat",
+        {"project": "tarot_bot"},
+        LocalShellTransport(),
+        fake_redis,
+    )
+
+    assert heartbeat.redis_client is fake_redis

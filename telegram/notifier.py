@@ -323,7 +323,7 @@ class TelegramNotifier:
                 agent = registry.get(project)
                 container = agent.resources.get(resource)
                 if isinstance(container, DockerContainer):
-                    snapshot = await get_postgres_snapshot(container.container_name)
+                    snapshot = await get_postgres_snapshot(container.transport, container.container_name)
                     if snapshot:
                         snapshot_escaped = html.escape(snapshot)
                         if len(snapshot_escaped) > 900:
