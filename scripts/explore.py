@@ -24,7 +24,7 @@ def run_analysis():
     print("=" * 60)
 
     # Устанавливаем соединение с базой данных SQLite
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
 
     # 1. Загружаем таблицы в Pandas DataFrame
     df_events = pd.read_sql_query("SELECT * FROM event_log", conn)

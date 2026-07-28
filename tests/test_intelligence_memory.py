@@ -1,11 +1,12 @@
 import os
 import json
+import sqlite3
 import pytest
 from datetime import datetime, timezone
 
 from services.event_bus import EventBus
 from services.classifier import Classifier
-from intelligence.models import EventRecord
+from intelligence.models import EventRecord, MetricSnapshot
 from intelligence.storage import SqliteEventStorage
 from intelligence.collector import IntelligenceCollector
 from intelligence.anomaly import check_anomaly, parse_float_metric
@@ -44,6 +45,40 @@ async def test_sqlite_event_storage_save_and_query(temp_db_path):
     assert retrieved.severity == "HIGH"
     assert retrieved.source == "collector"
     assert json.loads(retrieved.payload_json) == {"status": "exited"}
+
+
+@pytest.mark.asyncio
+async def test_sqlite_event_storage_uses_busy_timeout(temp_db_path, monkeypatch):
+    timeouts = []
+    original_connect = sqlite3.connect
+
+    def connect_with_timeout(*args, **kwargs):
+        timeouts.append(kwargs.get("timeout"))
+        return original_connect(*args, **kwargs)
+
+    monkeypatch.setattr("intelligence.storage.sqlite3.connect", connect_with_timeout)
+    storage = SqliteEventStorage(db_path=temp_db_path)
+    record = EventRecord(
+        event_type="ResourceStopped",
+        project="imagebot",
+        resource="app",
+        severity="HIGH",
+        source="collector",
+        payload_json="{}",
+    )
+    snapshot = MetricSnapshot(
+        agent="nexus",
+        resource="app",
+        status="running",
+    )
+
+    await storage.save(record)
+    await storage.query(limit=1)
+    await storage.save_metric_snapshot(snapshot)
+    await storage.query_metric_snapshots("nexus", "app", limit=1)
+    await storage.query_all_metric_snapshots(limit=1)
+
+    assert timeouts == [30.0] * 6
 
 
 @pytest.mark.asyncio

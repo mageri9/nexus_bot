@@ -51,7 +51,7 @@ class SqliteEventStorage(EventStorage):
         self._init_db()
 
     def _init_db(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             # WAL вместо дефолтного journal_mode=DELETE: nexus-core (collector +
             # predictor) и scripts/train.py — разные процессы, оба пишут/читают
             # один и тот же файл. Без WAL писатель блокирует читателей сильнее,
@@ -95,7 +95,7 @@ class SqliteEventStorage(EventStorage):
 
     # --- Существующие синхронные методы ---
     def _save_sync(self, record: EventRecord) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             conn.execute(
                 "INSERT INTO event_log VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (record.event_id, record.timestamp.isoformat(), record.event_type, record.project, record.resource, record.severity, record.source, record.payload_json)
@@ -111,7 +111,7 @@ class SqliteEventStorage(EventStorage):
         if conditions: query_str += " WHERE " + " AND ".join(conditions)
         query_str += " ORDER BY timestamp DESC LIMIT ?"
         params.append(limit)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             cursor = conn.cursor()
             cursor.execute(query_str, tuple(params))
             rows = cursor.fetchall()
@@ -119,7 +119,7 @@ class SqliteEventStorage(EventStorage):
 
     # --- Новые синхронные методы ---
     def _save_metric_snapshot_sync(self, snapshot: MetricSnapshot) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             conn.execute(
                 """
                 INSERT INTO metric_snapshots (snapshot_id, timestamp, agent, resource, status, cpu, mem_perc, restarts)
@@ -139,7 +139,7 @@ class SqliteEventStorage(EventStorage):
             conn.commit()
 
     def _query_metric_snapshots_sync(self, agent: str, resource: str, limit: int) -> List[MetricSnapshot]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -166,7 +166,7 @@ class SqliteEventStorage(EventStorage):
         ]
 
     def _query_all_metric_snapshots_sync(self, limit: int) -> List[MetricSnapshot]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             cursor = conn.cursor()
             # ORDER BY ... ASC LIMIT ? возвращает САМЫЕ СТАРЫЕ N снимков, как только
             # их накопится больше limit — обучающий датасет тогда молча застревает

@@ -134,14 +134,14 @@ if __name__ == "__main__":
 ### 1. Тренировка моделей предиктора рисков
 Чтобы обновить модель прогнозирования на накопленной статистике метрик и инцидентов:
 ```bash
-docker exec -it nexus-core python scripts/train.py incident_prediction
+python -m pip install -r requirements-dev.txt
+python scripts/train.py incident_prediction
 ```
 *Скрипт выполнит временной сплит данных, оценит PR-AUC и сохранит модель в реестр `models/`, только если её качество превосходит предыдущую версию.*
 
-Рекомендуется добавить эту задачу в системный планировщик `cron` для запуска раз в сутки (например, в 3:00 ночи):
-```text
-0 3 * * * docker exec nexus-core python scripts/train.py incident_prediction >> /root/train_cron.log 2>&1
-```
+В отдельном development/ML environment рекомендуется добавить эту задачу в системный планировщик `cron` для запуска раз в сутки (например, в 3:00 ночи):
+Запускайте обучение из отдельного development/ML environment, которому доступен
+`data/events.db`; production-контейнер `nexus-core` содержит только runtime-зависимости.
 
 ### 2. Офлайн-аналитика экосистемы
 Быстрый ретроспективный анализ инфраструктуры без обращения к Telegram:

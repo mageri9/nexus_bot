@@ -59,9 +59,9 @@ services:
         condition: service_started
     volumes:
       # Сокет больше НЕ монтируем напрямую
-      - /home/mageri9/apps/m9_imagebot/data:/host_root/home/mageri9/apps/m9_imagebot/data:ro
-      - /home/mageri9/apps/tarot_bot:/host_root/home/mageri9/apps/tarot_bot:ro
-      - /home/mageri9/apps/commit_chronicle/data:/host_root/home/mageri9/apps/commit_chronicle/data:ro
+      - ${HOST_DATA_PATH_IMAGEBOT:-/home/mageri9/apps/m9_imagebot/data}:/host_root/home/mageri9/apps/m9_imagebot/data:ro
+      - ${HOST_DATA_PATH_TAROT:-/home/mageri9/apps/tarot_bot}:/host_root/home/mageri9/apps/tarot_bot:ro
+      - ${HOST_DATA_PATH_CHRONICLE:-/home/mageri9/apps/commit_chronicle/data}:/host_root/home/mageri9/apps/commit_chronicle/data:ro
       - /:/host_root:ro   # оставляем широким только для root_disk (nexus_agent мониторит системный диск целиком)
     env_file:
       - .env
